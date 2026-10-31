@@ -114,6 +114,19 @@ struct CommandList final {
 
     boost::container::small_vector<CommandListHeader, 512> command_lists;
     boost::container::small_vector<CommandHeader, 512> prefetch_command_list;
+
+    /// EDEN_NX2_PB_COPY: the words of command_lists as they were at submit, run instead of guest
+    /// memory. snapshot_offsets holds each entry's start in snapshot_words, or NoSnapshot.
+    static constexpr size_t NoSnapshot = ~size_t{0};
+    std::vector<u32> snapshot_words;
+    std::vector<size_t> snapshot_offsets;
+
+    [[nodiscard]] const u32* Snapshot(size_t index) const {
+        if (index >= snapshot_offsets.size() || snapshot_offsets[index] == NoSnapshot) {
+            return nullptr;
+        }
+        return snapshot_words.data() + snapshot_offsets[index];
+    }
 };
 
 /// @brief The DmaPusher class implements DMA submission to FIFOs, providing an area of memory that the
@@ -155,9 +168,15 @@ private:
     bool Step();
     size_t ProcessCommands(std::span<const CommandHeader> commands, size_t word_offset = 0);
     /// Brings command list words the GPU wrote (still only in host buffers) to guest memory.
-    /// Returns whether anything was flushed.
-    bool FlushGpuWrittenCommands(GPUVAddr address, size_t size);
+    /// Returns whether anything was flushed. gpu_words is set when guest memory holds words the
+    /// GPU wrote on these pages (flushed now or since the last writer), newer than a snapshot.
+    bool FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu_words = nullptr);
+    /// Overwrites the words of an entry at address that lie on GPU-written pages with guest memory.
+    void ReadGpuWrittenWords(GPUVAddr address, std::span<u32> words) const;
+    /// EDEN_NX2_PB_CHECK: logs entries whose guest words changed since their submit snapshot.
+    void CheckSnapshot(GPUVAddr address, std::span<const u32> snapshot);
     size_t command_resume_offset{};
+    std::vector<u32> gpu_written_words; ///< A snapshot with GPU-written words read over it
 
     void SetState(const CommandHeader& command_header);
 

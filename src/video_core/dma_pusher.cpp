@@ -4,11 +4,13 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <limits>
+#include <vector>
 
 #include "common/logging.h"
 #include "common/settings.h"
@@ -199,6 +201,7 @@ bool DmaPusher::Step() {
     }
 
     if (header.size > 0) {
+        bool gpu_words = false;
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -216,7 +219,7 @@ bool DmaPusher::Step() {
                 }();
                 const bool flushed_parameters =
                     flush_parameters && words <= 64 &&
-                    FlushGpuWrittenCommands(dma_state.dma_get, words * sizeof(u32));
+                    FlushGpuWrittenCommands(dma_state.dma_get, words * sizeof(u32), &gpu_words);
                 if (flushed_parameters) {
                     engine_state->current_dirty = false;
                 } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
@@ -234,7 +237,21 @@ bool DmaPusher::Step() {
         // (the split only starts with unsafe reads; the settings can change mid-game).
         const bool use_safe = !VideoCommon::GpuSplit::Get().Active() &&
                               (Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe());
-        if (use_safe) {
+        if (const u32* const snapshot = command_list.Snapshot(dma_pushbuffer_subindex)) {
+            std::span<const u32> words{snapshot, header.size};
+            CheckSnapshot(dma_state.dma_get, words);
+            FlushGpuWrittenCommands(dma_state.dma_get, words.size_bytes(), &gpu_words);
+            if (gpu_words) {
+                // The snapshot predates the GPU work that writes these words: take the pages the
+                // GPU wrote from guest memory, now flushed, and the rest from the snapshot.
+                gpu_written_words.assign(words.begin(), words.end());
+                ReadGpuWrittenWords(dma_state.dma_get, gpu_written_words);
+                words = gpu_written_words;
+            }
+            const std::span<const CommandHeader> commands{
+                reinterpret_cast<const CommandHeader*>(words.data()), words.size()};
+            command_resume_offset += ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
+        } else if (use_safe) {
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
             command_resume_offset += ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
@@ -440,7 +457,7 @@ bool DmaPusher::WantsSegment() const {
            (engine == Engines::EngineTypes::Maxwell3D && dma_state.method >= MacroRegistersStart);
 }
 
-bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
+bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu_words) {
     // Mario Kart World runs small command lists its culling dispatches fill in each frame. Safe
     // reads flush every command list; unsafe ones only flush those on pages the GPU has written,
     // or their draws run with an older frame's words. Only those pages wait for the split's back.
@@ -484,6 +501,9 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     }
     if (!stale) {
         // Flushed since the front last sent work that may write these pages.
+        if (gpu_words) {
+            *gpu_words = true;
+        }
         if (stats) {
             g_pbflush_stats.fresh.fetch_add(1, std::memory_order_relaxed);
         }
@@ -514,7 +534,52 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     if (stats) {
         g_pbflush_stats.flushes.fetch_add(1, std::memory_order_relaxed);
     }
+    if (gpu_words) {
+        *gpu_words = true;
+    }
     return true;
+}
+
+void DmaPusher::ReadGpuWrittenWords(GPUVAddr address, std::span<u32> words) const {
+    const GPUVAddr end = address + words.size_bytes();
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < end; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        if (!device || !Nx2IsGpuWritten(*device)) {
+            continue;
+        }
+        const GPUVAddr begin = (std::max)(page, address);
+        const GPUVAddr stop = (std::min)(page + 0x1000, end);
+        memory_manager.ReadBlockUnsafe(begin, words.data() + (begin - address) / sizeof(u32), stop - begin);
+    }
+}
+
+void DmaPusher::CheckSnapshot(GPUVAddr address, std::span<const u32> snapshot) {
+    static const bool check = [] {
+        const char* value = std::getenv("EDEN_NX2_PB_CHECK");
+        return value != nullptr && value[0] != '0';
+    }();
+    if (!check) {
+        return;
+    }
+    static std::atomic<u64> checked{};
+    static std::atomic<u64> changed{};
+    std::vector<u32> words(snapshot.size());
+    memory_manager.ReadBlockUnsafe(address, words.data(), words.size() * sizeof(u32));
+    size_t differing = 0;
+    size_t first = 0;
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (words[i] != snapshot[i] && differing++ == 0) {
+            first = i;
+        }
+    }
+    const u64 total = checked.fetch_add(1) + 1;
+    if (differing != 0 && changed.fetch_add(1) < 32) {
+        LOG_WARNING(HW_GPU, "NX2 pb copy: ch {} entry {:#x}+{:#x}: {} words changed since submit (first [{}] {:08x}->{:08x})",
+                    channel_state.bind_id, address, snapshot.size(), differing, first, snapshot[first], words[first]);
+    }
+    if (total % 20000 == 0) {
+        LOG_INFO(HW_GPU, "NX2 pb copy: {} of {} entries changed since submit", changed.load(), total);
+    }
 }
 
 void DmaPusher::BindRasterizer(VideoCore::RasterizerInterface* rasterizer_) {

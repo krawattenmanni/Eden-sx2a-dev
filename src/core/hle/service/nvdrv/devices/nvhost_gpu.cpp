@@ -24,6 +24,7 @@
 #include "video_core/engines/puller.h"
 #include "video_core/gpu.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/host1x/host1x.h"
 
 namespace Service::Nvidia::Devices {
@@ -405,6 +406,27 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
             channel_state->memory_manager->ReadBlockUnsafe(entry.addr, contents.data(), bytes);
             std::ofstream dump("native-submit-" + std::to_string(channel_state->bind_id) + "-" + std::to_string(native_submit_logs) + "-" + std::to_string(i) + ".bin", std::ios::binary);
             dump.write(reinterpret_cast<const char*>(contents.data()), bytes);
+        }
+    }
+
+    // EDEN_NX2_PB_COPY (on by default for Switch 2 programs, =0 off): the GPU thread runs each
+    // entry's words as they were at submit. Guests re-patch reused command buffers for the next
+    // frame, which can happen before the GPU thread reads them.
+    static const bool pb_copy = Tegra::Nx2EnvDefaultOn("EDEN_NX2_PB_COPY");
+    if (pb_copy && (UsesNativeAbi() || Tegra::Nx2Program()) && channel_state->memory_manager) {
+        auto& memory = *channel_state->memory_manager;
+        entries.snapshot_offsets.reserve(entries.command_lists.size());
+        for (const auto& entry : entries.command_lists) {
+            const size_t words = entry.size;
+            const size_t bytes = words * sizeof(u32);
+            if (bytes == 0 || !memory.IsFullyMappedRange(entry.addr, bytes)) {
+                entries.snapshot_offsets.push_back(Tegra::CommandList::NoSnapshot);
+                continue;
+            }
+            const size_t offset = entries.snapshot_words.size();
+            entries.snapshot_words.resize(offset + words);
+            memory.ReadBlockUnsafe(entry.addr, entries.snapshot_words.data() + offset, bytes);
+            entries.snapshot_offsets.push_back(offset);
         }
     }
 
