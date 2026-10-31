@@ -1,159 +1,174 @@
 > [!IMPORTANT]
 > **AI disclaimer:** most of this fork's Android port (the code, docs and tooling on top of Eden-NS2) was written
-> with the help of an AI coding assistant (Claude). It was then reviewed and tested by hand, on a single phone.
-> Treat it as experimental code. Bugs that a careful human author would have caught can still be in it.
+> with the help of an AI coding assistant (Claude), then reviewed and tested by hand on a single phone. Treat it as
+> experimental: bugs a careful human author would have caught can still be in it.
 
 > [!WARNING]
-> **This is an unofficial, experimental fork. It is not Eden, and the Eden team does not support it.**
-> Please do not report problems from this build to the Eden project, Eden-NS2 or Takoroka.
+> **Unofficial, experimental fork. It is not Eden, and the Eden team does not support it.**
+> Please don't report problems with this build to Eden, Eden-NS2 or Takoroka.
 
-## Eden SX2A (Eden NX2 for Android)
+# Eden SX2A
 
-Android build of Switch 2 emulation, shown as **Eden SX2A** on the home screen. Since v0.2.1 it is built on [Eden-NS2](https://github.com/0x2593/Eden-NS2)
-(0x2593's Switch 2 fork of Eden) and follows it with ordinary merges; this fork adds the Android app layer and the
-fixes needed on phones. Versions up to v0.2 were built on [Takoroka's eden-nx2](https://git.eden-emu.dev/Takoroka/eden-nx2).
-Eden-NS2's own README follows below this section.
+Switch 2 emulation on Android phones. Eden SX2A is the Android build of
+[Eden-NS2](https://github.com/0x2593/Eden-NS2) (0x2593's Switch 2 fork of Eden): it follows Eden-NS2 with ordinary
+merges and adds the Android app layer and the fixes phones need. Versions up to v0.2 were built on
+[Takoroka's eden-nx2](https://git.eden-emu.dev/Takoroka/eden-nx2). Eden-NS2's own README follows this section.
 
-**Best-running game so far: Pokémon Pokopia, playable at about 20 FPS** on a Snapdragon SM8850 phone
-(Adreno 840, 16 GB RAM) with the bundled Turnip driver.
+Everything that was tested is built in and always on. There is nothing to configure beyond picking your games.
+
+## Quick start
+
+1. Download the APK from this repo's **Releases** page and check its SHA-256 against the release notes.
+2. Install it and open **Eden SX2A**. On Adreno GPUs it selects the bundled Turnip driver by itself.
+3. Open Settings → **Switch 2 readiness check** and fix anything it flags.
+4. Add the folder that holds your loose Switch 2 dumps as a game folder, and grant **All files access** when asked.
+5. Tap a game. The first load sits on a black screen for a few minutes while shaders are built.
 
 ## Compatibility
 
+Tested on one phone: Honor foldable, Snapdragon SM8850 (Adreno 840), 16 GB RAM, bundled Turnip driver.
+
 | Game | Version | Status |
 | --- | --- | --- |
-| Pokémon Pokopia (`0400A3A01EE4C000`) | update 327680 | **Playable**, about 20 FPS most of the time. First load takes about 4 minutes |
-| Donkey Kong Bananza (`040074A01BF12000`) | update 458752 | **Playable** on Turnip, terrain drawn. About 5-20 FPS, long loading |
+| Pokémon Pokopia (`0400A3A01EE4C000`) | update 327680 | **Playable**, about 20 FPS. First load about 4 minutes |
+| Donkey Kong Bananza (`040074A01BF12000`) | update 458752 | **Playable** on Turnip, about 5-20 FPS, long loading |
+| Mario Kart World (`0400C3F00006E000`) | 1.0.0 (no update) | **Boots to races**, about 6-10 FPS. Dark road, missing surfaces, flickering frames; may crash while a course loads |
 | Nintendo Switch 2 Welcome Tour (`040057C02159A000`) | - | Boots; can crash after character creation |
-| Mario Kart World (`0400C3F00006E000`) | 1.0.0 (no update) | **Boots to races** (since v0.2.2), about 6-10 FPS. Dark road, missing surfaces and flickering frames in races; may crash while a course loads. Update 1.8.0 is untested here |
 | Other Switch 2 games | - | Untested on Android. Reports welcome |
 
-| Device | GPU driver | Status |
-| --- | --- | --- |
-| Honor foldable, Snapdragon SM8850 (Adreno 840), 16 GB RAM | Mr. Purple Turnip T30 (bundled) | Tested |
-| Same phone | Qualcomm 512.842.44 (stock) | Runs, but some draws fail (missing ground). Use Turnip |
-| Phones with less than 16 GB RAM | - | Likely killed by Android while loading |
-| Mali, PowerVR or other non-Adreno GPUs | - | Untested |
+| Device | Status |
+| --- | --- |
+| Adreno GPU, 16 GB RAM, bundled Turnip driver | Tested (the phone above) |
+| Same phone, stock Qualcomm driver | Runs, but some draws fail (DK Bananza's ground is missing). Use Turnip |
+| 12 GB RAM | May work for lighter games |
+| Less than 12 GB RAM | Likely closed by Android while loading |
+| Mali, PowerVR or other non-Adreno GPUs | Untested |
 
-### Install
+## Requirements
 
-- Get the APK from this repo's **Releases** page only, and check its SHA-256 against the one in the release notes.
-- It installs as `dev.eden.nx2` ("Eden SX2A"), alongside the official Eden app, and keeps its own settings and saves.
-  v0.2.2 installs over earlier Eden NX2 versions and keeps your settings.
-- It needs an arm64 device on Android 13 or newer. **RAM:** 16 GB is recommended; 12 GB may work for lighter games.
-  DK Bananza peaks at about 6 GB for the app.
-- **GPU driver:** on Adreno GPUs the app ships Mr. Purple's Turnip T30 (Mesa, MIT licence, 3.7 MB) and selects it on
-  first start if you have not picked a driver yourself. You can switch back to the system driver in the driver manager.
+- arm64 phone with Android 13 or newer.
+- **RAM:** 16 GB recommended; 12 GB may work for lighter games. DK Bananza peaks at about 6 GB for the app.
+- **GPU:** Adreno. The app ships Mr. Purple's Turnip T30 (Mesa, MIT licence, 3.7 MB) and selects it on first start
+  unless you already picked a driver. You can switch back to the system driver in the driver manager.
+- **Games:** loose (extracted) Switch 2 dumps. NSP, XCI and other containers are not supported for Switch 2 titles.
+  Keys and firmware are not needed for loose Switch 2 titles.
 
-### Loading a Switch 2 dump
+The app installs as `dev.eden.nx2`, alongside the official Eden app, with its own settings and saves. New versions
+install over older Eden NX2 / Eden SX2A builds and keep your settings and saves.
 
-Loose (extracted) dumps boot straight from their `exefs/main`. Dumps in NSP, XCI or other container formats are not
-supported for Switch 2 titles.
+## Adding games
 
-1. Tap the folder button in the games list, then choose **Launch ExeFS game folder**.
-2. When asked, grant **All files access**. The app needs it to read the files next to `main`.
-3. Pick the game's folder. The app searches its subfolders for `exefs/main`. These layouts work:
-   - `Game/exefs/` + `Game/romfs/`
-   - the `exefs/` folder itself
-   - `Game/base/`, `Game/updates/<version>/`, `Game/dlc/<title id>/<version>/romfs`
-4. If the app finds several (for example base and an update), pick one from the list. The newest update is listed first.
-5. Loading sits on a black screen for a while. That alone is not a hang.
+A loose dump is a folder with `exefs/` (holding `main`, `main.npdm` and the other program files) and `romfs/`. The app
+boots `exefs/main` from its real path, which is why it needs **All files access**.
 
-**In the games list:** add the folder that holds your dumps (for example `Switch2/`) as a game folder in Settings, and
-grant All files access. Each loose game then shows up in the list once, with its newest update (else the base game).
-A folder like `Switch2/Game/updates/<version>/exefs` is found from `Switch2/`. If you add a folder higher up (for example
-the storage root), turn on deep scan for it so updates are found too; that makes refreshing the list slower.
+**From the games list (recommended).** Add the folder that holds your dumps, for example `Switch2/`, as a game folder.
+Each game shows up once, with its newest update if you have one, otherwise the base game. These layouts are found:
 
-**Readiness check:** Settings → **Switch 2 readiness check** (the first entry) lists what is missing on your phone (RAM, Android version,
-GPU driver, recommended settings, All files access, games found, free storage, battery setting), with a button to fix
-each one where the app has a screen for it.
+- `Switch2/Game/exefs/` + `Switch2/Game/romfs/`
+- `Switch2/Game/base/` and `Switch2/Game/updates/<version>/`
+- DLC in `Switch2/Game/dlc/<title id>/<version>/romfs`
 
-Default settings: CPU backend **Dynarmic**, GPU mode **Fast**, async presentation **off**, resolution **1x**,
-asynchronous shaders **on**. Switch 2 games switch to the memory layout **12GB (Switch 2, Unsafe)** on their own.
-Keys and firmware are not needed for loose Switch 2 titles.
+If you add a folder higher up, such as the storage root, turn on deep scan for it so updates are found too (refreshing
+the list gets slower).
 
-The app needs no extra configuration: the GPU driver and every fix tested on the phone are built in and always on.
-Switch 2 games run the GPU work on two threads with the faster command-list flush, which is quicker on phones than
-one thread.
+**One game at a time.** In the games list, tap the folder button → **Launch ExeFS game folder** and pick the game's
+folder (or its `exefs/` folder). If the app finds several versions, it asks which one to start; the newest is first.
 
-### Troubleshooting
+Switch 2 games are recognised from their `main.npdm` and get the 12 GB memory layout automatically, only while they
+run.
 
-Start with Settings → **Switch 2 readiness check**: it finds most setup problems on its own.
+## Switch 2 readiness check
 
-**A loose game is not in the games list.** Grant All files access, check that the folder you added contains the game
+Settings → **Switch 2 readiness check** (the first entry) checks your setup and marks each item as pass, warning or
+fail, with a button to fix it where the app has a screen for that:
+
+- 64-bit phone and Android 13 or newer
+- RAM (16 GB pass, 12 GB warning)
+- Adreno GPU and the bundled Turnip driver
+- recommended settings: Dynarmic CPU backend, asynchronous shaders on, async presentation off, resolution 1x or lower
+- All files access, and at least one Switch 2 game found
+- free storage (shader caches and logs grow) and battery usage set to Unrestricted
+
+It runs again when you come back to it, or with **Run again**.
+
+## Defaults
+
+CPU backend **Dynarmic**, GPU mode **Fast**, resolution **1x**, asynchronous shaders **on**, async presentation
+**off**. Switch 2 games run the GPU work on two threads with the faster command-list flush, which is quicker on
+phones than one thread.
+
+## Troubleshooting
+
+Start with the readiness check: it finds most setup problems on its own.
+
+**A game is missing from the games list.** Grant All files access, check that the folder you added contains the game
 (or turn on deep scan for it), then refresh the list. **Launch ExeFS game folder** works either way.
 
-**The app closes on its own, with no error.** Usually Android's low-memory killer, not a crash.
-- Keep the game in front, close other apps first, and set battery usage for Eden SX2A to Unrestricted. Exclude it from
-  any "app freezer" or "smart memory" feature your phone has.
-- Phones with less than 16 GB of RAM will likely not cope.
-
 **Black screen after launching.**
-- **Wait.** Loading takes a few minutes on a black screen before the first frame.
-- **Keep the screen on and the app in front.** With the screen off or the app in the background, emulation waits.
-- **First boot:** DK Bananza asks for accessibility settings once. Press A on the on-screen controller.
-- **Wrong folder:** pick the folder that holds `exefs/` and `romfs/` (or a parent the app can search).
-- **Driver:** check that the Turnip driver is selected (Settings → GPU driver manager).
-- If it still hangs, share `Android/data/dev.eden.nx2/files/log/eden_log.txt` and your phone model, RAM and driver.
+- Wait: loading takes a few minutes before the first frame.
+- Keep the screen on and the app in front; emulation waits in the background.
+- DK Bananza asks for accessibility settings on first boot: press A on the on-screen controller.
+- Check that the Turnip driver is selected (Settings → GPU driver manager).
+- If nothing happens for many minutes, check the dump: damaged program files (`main`, `sdk`, `subsdk0` that fail to
+  decompress) hang without an error, and the log shows `assert r == int(nso_header.segments[i].size)` near the start.
+- Still stuck? Share `Android/data/dev.eden.nx2/files/log/eden_log.txt` with your phone model, RAM and driver.
 
-**Low frame rate.** Keep asynchronous shaders on, close other apps, and let the phone cool down.
-Skip in-game videos where the game allows it: they play at the game's frame rate.
+**The app closes on its own, with no error.** Usually Android's low-memory killer, not a crash. Keep the game in front,
+close other apps, set battery usage for Eden SX2A to Unrestricted, and exclude it from any "app freezer" or "smart
+memory" feature your phone has.
 
-**A game reaches a black screen and nothing happens for many minutes.** Check the dump: Switch 2 dumps with damaged
-program files (`main`, `sdk`, `subsdk0` that fail to decompress) hang without an error. The log then shows
-`assert r == int(nso_header.segments[i].size)` near the start.
+**Low frame rate.** Keep asynchronous shaders on, close other apps and let the phone cool down. Skip in-game videos
+where you can: they play at the game's frame rate.
 
-**Closing the game.** Swiping Eden SX2A away from recent apps now ends the game and the app. Use that before starting a
-different game if a launch misbehaves.
+**Starting another game.** Swipe Eden SX2A away from recent apps first; that ends the game and the app.
 
-### Be careful about
+## Known problems
 
-- **Legal:** only use games, keys and firmware dumped from hardware you own. None are included, and none will be provided.
-- **Signing key:** the APK is signed with the public test key shipped in Eden's source. Anyone can sign an APK with that
-  key, so another "Eden SX2A" APK could install over this one. Only install builds from this repo, and check the checksum.
-- **All files access:** lets the app read and write all of shared storage. It is only needed for loose dumps; you can
-  revoke it afterwards.
-- **Memory:** the 10GB and 12GB layouts are unsafe. Android may kill the app, or other apps, under memory pressure.
-- **Heat and battery:** expect the phone to get hot and the battery to drain fast.
-- **Saves:** crashes can happen. Back up saves you care about, under `Android/data/dev.eden.nx2/files/`.
-
-### Known problems
-
-- **Low frame rate**: about 5-20 FPS in DK Bananza, around 20 FPS in Pokopia; being investigated.
-- **Mario Kart World 1.0.0** boots and races, but its mesh shaders are not supported yet (dark road, missing surfaces), some
-  frames in races flicker, and it can crash with a GPU error while a course loads. Newer updates are untested.
+- **Frame rate** is low: about 5-20 FPS in DK Bananza, around 20 FPS in Pokopia, 6-10 in Mario Kart World.
+- **Mario Kart World 1.0.0:** its mesh shaders are not supported yet (dark road, missing surfaces), some frames flicker
+  during races, and it can crash with a GPU error while a course loads. Newer updates are untested.
 - **First loads** take minutes while shaders are built; later loads are faster.
-- **Stock Qualcomm driver:** two pipelines fail to build, so parts of the scene (DK Bananza's ground) are missing.
+- **Stock Qualcomm driver:** two pipelines fail to build, so parts of some scenes are missing.
 - **Videos** may play slowly.
 - **Memory:** about 4-5 GB (RAM plus swap) in DK Bananza.
-- **Long black loading screens** before the first frame.
 
-### What this fork adds on top of Eden-NS2
+## Be careful about
 
-- **Android app:** 10 GB and 12 GB memory layouts, launching loose ExeFS dumps by real path and listing them from game
-  folders, a Switch 2 readiness check, loose DLC
-  (`dlc/<title id>/<version>/romfs`), Switch 2 defaults, the bundled Turnip
-  driver, and ending the game when the app is swiped away.
+- **Legal:** only use games, keys and firmware dumped from hardware you own. None are included or provided.
+- **Signing key:** the APK is signed with the public test key from Eden's source, so anyone could sign another
+  "Eden SX2A" APK that installs over this one. Only install builds from this repo, and check the checksum.
+- **All files access** lets the app read and write all of shared storage. It is only needed for loose dumps; you can
+  revoke it when you're done.
+- **Memory layouts:** the 10 GB and 12 GB layouts are unsafe; Android may close the app, or other apps, under memory
+  pressure.
+- **Heat and battery:** expect the phone to get hot and the battery to drain fast.
+- **Saves:** back up saves you care about, under `Android/data/dev.eden.nx2/files/`.
+
+## What this fork changes on top of Eden-NS2
+
+- **Android app:** loose ExeFS dumps launched by real path and listed from game folders, the Switch 2 readiness check,
+  loose DLC, 10 GB and 12 GB memory layouts, Switch 2 defaults, the bundled Turnip driver, and ending the game when the
+  app is swiped away.
 - **arm64 macro JIT:** the GPU's macro programs had only an x86-64 JIT; an arm64 backend (oaknut) runs them about 5x
-  faster than the interpreter. Fuzzed against the interpreter with 0 mismatches (`tools/nx2/jit_fuzz/`).
+  faster than the interpreter, fuzzed against it with 0 mismatches (`tools/nx2/jit_fuzz/`).
 - **Adreno fixes:** the storage buffer limit on Qualcomm drivers, no host occlusion queries for Switch 2 games (they
-  crashed the driver), the storage CAS helper the stock driver needs, dropping draws whose pipeline fails to build, and
+  crashed the driver), the storage CAS helper the stock driver needs, skipping draws whose pipeline fails to build, and
   dropping methods sent to unbound subchannels.
+- **GPU thread split on phones:** fewer waits between the two GPU threads (per-call-site drains, acquires and binds
+  that skip the drain, a separate epoch for DMA reads), so the split is on by default on Android.
+- **Pushbuffer flush:** Eden-NS2's flush of GPU-written command words (DK Bananza's destructible terrain) is on for
+  Switch 2 games, skips pages already flushed since the last compute or copy work, and flushes the rest of a command
+  list's GPU-written pages ahead with one host GPU wait.
 - **Memory:** Dynarmic's arm64 per-block metadata in vectors (it was over 1 GiB) and guest thread stacks left
   uninitialized (about 490 MiB saved).
-- **Pushbuffer flush:** Eden-NS2's flush of GPU-written command words (DK Bananza's destructible terrain) is turned on for
-  Switch 2 games, and skips the waits for pages already flushed since the last compute or copy work.
-  Since v0.2.1 it also flushes the rest of a command list's GPU-written pages ahead, with
-  one host GPU wait.
-- **GPU thread split on phones:** fewer front-thread waits (per-call-site drain counts, acquires and binds that skip the
-  drain, a separate epoch for DMA reads), so the split is on by default on Android too.
-- **Fixes:** a crash on unmapped texture buffers (Pokopia), and Mario Kart World 1.0.0's older SDK (graphics boot
+- **Game fixes:** a crash on unmapped texture buffers (Pokopia), and Mario Kart World 1.0.0's older SDK (graphics boot
   flags, GPU session and its address space partition queries, display interface version 1, output encoding 0x5).
-- **Shaders and video:** a multi-channel bindless 2D sample form in the shader lowering (Welcome Tour), uniform shifts,
-  reductions with uniform pointers and uniform predicate tables (Mario Kart World), Generic31Y/Z/W attributes, and faster
-  video frame output.
+- **Shaders and video:** more Switch 2 shader forms (a multi-channel bindless 2D sample for Welcome Tour; uniform shifts,
+  reductions with uniform pointers and uniform predicate tables for Mario Kart World), Generic31Y/Z/W attributes, and
+  faster video frame output.
 
-Licence: GPLv3 or later, same as Eden. Every release is built from the tagged commit in this repo.
-More detail: [NX2_ANDROID.md](NX2_ANDROID.md).
+Licence: GPLv3 or later, same as Eden. The bundled Turnip driver is Mesa (MIT licence), unmodified from its official
+release. Every release is built from the tagged commit in this repo. More detail: [NX2_ANDROID.md](NX2_ANDROID.md).
 
 ---
 
