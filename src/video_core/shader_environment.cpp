@@ -556,6 +556,19 @@ void GenericEnvironment::InitializeNativeCode(u32 source_header_size,
         }
     }
     const u64 native_program_key = Shader::Ampere::NativeProgramKey(native);
+    // EDEN_NX2_SHADER_DUMP=<dir>: keep every captured native program (named by its key) so the
+    // lowering can be tested offline against all of a game's shaders (tools/nx2/lowertest).
+    if (static const char* const dump_directory = std::getenv("EDEN_NX2_SHADER_DUMP");
+        dump_directory != nullptr) {
+        const auto folder = std::filesystem::path{dump_directory};
+        const auto path = folder / fmt::format("{:016x}-{}-{:x}.bin", native_program_key,
+                                               source_header_size == 0 ? "cs" : "gfx", program_base);
+        if (!std::filesystem::exists(path)) {
+            std::filesystem::create_directories(folder);
+            std::ofstream dump(path, std::ios::binary);
+            dump.write(reinterpret_cast<const char*>(native.data()), native.size() * sizeof(Instruction));
+        }
+    }
     // EDEN_NATIVE_FRONTEND selects, per program and before any IR exists, whether the native Ampere
     // frontend translates it. The default (unset or "lower") leaves the lowering path untouched.
     if (const auto frontend_mode = Shader::Ampere::SelectedFrontendMode();
