@@ -32,7 +32,7 @@ Tested on one phone: Honor foldable, Snapdragon SM8850 (Adreno 840), 16 GB RAM, 
 | --- | --- | --- |
 | Pokémon Pokopia (`0400A3A01EE4C000`) | update 327680 | **Playable**, about 20 FPS. First load about 4 minutes |
 | Donkey Kong Bananza (`040074A01BF12000`) | update 458752 | **Playable** on Turnip, about 5-20 FPS, long loading |
-| Mario Kart World (`0400C3F00006E000`) | 1.0.0 (no update) | **Boots to races**, about 6-10 FPS. Dark road, missing surfaces, flickering frames; may crash while a course loads |
+| Mario Kart World (`0400C3F00006E000`) | 1.0.0 (no update) | **In game with graphical glitches**, about 6-10 FPS. Dark road, missing surfaces, flickering frames; may crash while a course loads |
 | Nintendo Switch 2 Welcome Tour (`040057C02159A000`) | - | Boots; can crash after character creation |
 | Other Switch 2 games | - | Untested on Android. Reports welcome |
 
