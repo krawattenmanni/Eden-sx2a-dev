@@ -1202,7 +1202,16 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             const u32 source = uniform_register(insn.words[1]), carrier = uniform_register(high);
             // Bit 76 selects USHF.R.W.U32.HI: Ud = Uc >> (Us & 31).
             const bool right = insn.words[2] == (0x08011e00U | high);
-            if (insn.Bits(24, 8) != 63 || (insn.words[2] != (0x08010e00U | high) && !right) || dest >= 63 ||
+            // Without .HI and with a URZ high word, USHF.L/R.W.U32 Ud, Ua, Us, URZ shifts Ua alone.
+            const u32 low = insn.Bits(24, 8);
+            const bool low_right = insn.words[2] == 0x08001e3fU;
+            if ((low_right || insn.words[2] == 0x08000e3fU) && low < 63 && dest < 63 &&
+                insn.words[1] < 64 && native_predicate == 7) {
+                emit((low_right ? 0x5c28000000070000ULL : 0x5c48000000070000ULL) | uniform_register(static_cast<u32>(dest)) |
+                     (u64{uniform_register(low)} << 8) | (u64{source} << 20) | (u64{1} << 39));
+                break;
+            }
+            if (low != 63 || (insn.words[2] != (0x08010e00U | high) && !right) || dest >= 63 ||
                 insn.words[1] >= 64 || source == ~0U || carrier == ~0U || native_predicate != 7)
                 return fail(index, "native uniform shift mode");
             emit((right ? 0x5c28000000070000ULL : 0x5c48000000070000ULL) | uniform_register(static_cast<u32>(dest)) | (u64{carrier} << 8) |

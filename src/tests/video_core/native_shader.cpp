@@ -5366,6 +5366,24 @@ TEST_CASE("Native uniform shifts honor their uniform execution predicate", "[nat
 }
 
 
+TEST_CASE("Native uniform low-word shifts wrap a register shift amount", "[native-shader]") {
+    for (bool right : {false, true}) {
+        const std::array<Native, 2> input{{{{0x05047299, 4, right ? 0x08001e3fU : 0x08000e3fU, 0}}, VertexTransform.back()}};
+        Shader::ObjectPool<IR::Inst> pool;
+        IR::Block block{pool};
+        TranslateScalarNative(input, block);
+        for (u32 value : {1U, 0x80000001U, 0xffffffffU})
+            for (u32 shift : {0U, 1U, 31U, 32U, 33U}) {
+                ScalarNativeMachine machine;
+                machine.regs[221] = value; machine.regs[220] = shift;
+                machine.Execute(block);
+                REQUIRE(machine.regs[220] == (right ? value >> (shift & 31) : value << (shift & 31)));
+                REQUIRE(machine.regs[221] == value);
+            }
+    }
+}
+
+
 TEST_CASE("Native shared loads retain uniform offsets and their byte displacement", "[native-shader]") {
     const std::array<Native, 2> input{{{{0xff1c7984, 0x13009, 0x08000800, 0}}, VertexTransform.back()}};
     Shader::ObjectPool<IR::Inst> pool;
