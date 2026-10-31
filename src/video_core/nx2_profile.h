@@ -55,6 +55,7 @@ enum class Zone : u32 {
     CpuWrites,    ///< Guest CPU writes applied before a submit (GPU::InvalidateGPUCache)
     ListEnd,      ///< FlushCommands and OnCommandListEnd after a submit's commands
     EntryCheck,   ///< Per GPFIFO entry: GPU-written words and dirty macro parameters
+    PbFlushFlush, ///< Of EntryCheck: the dirty check and buffer download after a pushbuffer drain
     Count,
 };
 
@@ -66,7 +67,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "descriptor acquire", "bind stage buffers", "push descriptors", "render targets",
     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
     "fence skipped", "method", "split drain", "split wait", "acquire fence wait",
-    "cpu writes", "list end", "entry check",
+    "cpu writes", "list end", "entry check", "pbflush flush",
 };
 
 // Set by ReadEnv when the GPU is created, not at library load: Android applies nx2_env.txt after

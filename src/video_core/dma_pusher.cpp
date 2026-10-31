@@ -42,8 +42,13 @@ struct PbFlushStats {
     std::atomic<u64> fresh{};               ///< Hits whose pages were flushed since the last writer
     std::atomic<u64> drains{};
     std::atomic<u64> flushes{};
+    /// Stale hits on a page flushed in an older epoch, by the engine whose work ended it
+    std::array<std::atomic<u64>, 6> stale_epoch{};
+    std::atomic<u64> stale_other{}; ///< Stale hits on a page not in the fresh table
 };
 PbFlushStats g_pbflush_stats;
+// The engine of the last method that moved the writer epoch (EDEN_NX2_PBFLUSH_STATS).
+Engines::EngineTypes g_last_writer{};
 // Read on first use: Android sets the switches after the library is loaded.
 bool PbFlushStatsEnabled() {
     static const bool enabled = [] {
@@ -80,9 +85,16 @@ void ReportPbFlushStats() {
     last = now;
     auto& s = g_pbflush_stats;
     const auto take = [](std::atomic<u64>& counter) { return counter.exchange(0, std::memory_order_relaxed); };
-    LOG_INFO(HW_GPU, "NX2 pbflush stats: checked {} hits <=8 {} <=64 {} >64 {} skipped {} fresh {} drains {} flushes {}",
+    LOG_INFO(HW_GPU, "NX2 pbflush stats: checked {} hits <=8 {} <=64 {} >64 {} skipped {} fresh {} drains {} flushes {} | stale after compute {} dma {} i2m {} 2d {} other {} | not in table {}",
              take(s.checked), take(s.hits[0]), take(s.hits[1]), take(s.hits[2]), take(s.skipped),
-             take(s.fresh), take(s.drains), take(s.flushes));
+             take(s.fresh), take(s.drains), take(s.flushes),
+             take(s.stale_epoch[static_cast<size_t>(Engines::EngineTypes::KeplerCompute)]),
+             take(s.stale_epoch[static_cast<size_t>(Engines::EngineTypes::MaxwellDMA)]),
+             take(s.stale_epoch[static_cast<size_t>(Engines::EngineTypes::KeplerMemory)]),
+             take(s.stale_epoch[static_cast<size_t>(Engines::EngineTypes::Fermi2D)]),
+             take(s.stale_epoch[static_cast<size_t>(Engines::EngineTypes::Nv01Timer)]) +
+                 take(s.stale_epoch[static_cast<size_t>(Engines::EngineTypes::Maxwell3D)]),
+             take(s.stale_other));
 }
 } // Anonymous namespace
 
@@ -363,6 +375,7 @@ void DmaPusher::CallMethod(u32 argument) {
         }
         if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
             ++g_nx2_writer_epoch;
+            g_last_writer = subchannel_type[dma_state.subchannel];
         }
         if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
@@ -409,6 +422,7 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         }
         if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
             ++g_nx2_writer_epoch;
+            g_last_writer = subchannel_type[dma_state.subchannel];
         }
         if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
@@ -481,6 +495,14 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu
         const u64 device_page = *device >> Nx2WrittenPageBits;
         if (!epoch || !Nx2IsFresh(device_page)) {
             stale = true;
+            if (stats && epoch) {
+                if (Nx2FreshSlot(device_page).device_page == device_page) {
+                    g_pbflush_stats.stale_epoch[static_cast<size_t>(g_last_writer)].fetch_add(
+                        1, std::memory_order_relaxed);
+                } else {
+                    g_pbflush_stats.stale_other.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
             break;
         }
     }
@@ -524,6 +546,7 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu
             }
         }
     }
+    VideoCommon::Nx2Profile::Scope flush_scope{VideoCommon::Nx2Profile::Zone::PbFlushFlush};
     if (!memory_manager.IsMemoryDirty(flush_begin, flush_size, VideoCommon::CacheType::BufferCache)) {
         return false;
     }
