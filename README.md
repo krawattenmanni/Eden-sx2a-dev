@@ -24,7 +24,7 @@ Eden-NS2's own README follows below this section.
 | Pokémon Pokopia (`0400A3A01EE4C000`) | update 327680 | **Playable**, about 20 FPS most of the time. First load takes about 4 minutes |
 | Donkey Kong Bananza (`040074A01BF12000`) | update 458752 | **Playable** on Turnip, terrain drawn. About 5-20 FPS, long loading |
 | Nintendo Switch 2 Welcome Tour (`040057C02159A000`) | - | Boots; can crash after character creation |
-| Mario Kart World (`0400C3F00006E000`) | 1.0.0 (no update) | **Does not boot** (black screen). Eden-NS2 was tested with update 1.8.0, which is untested here |
+| Mario Kart World (`0400C3F00006E000`) | 1.0.0 (no update) | **Boots to races** (since v0.2.2), about 6-10 FPS. Dark road, missing surfaces and flickering frames in races; may crash while a course loads. Update 1.8.0 is untested here |
 | Other Switch 2 games | - | Untested on Android. Reports welcome |
 
 | Device | GPU driver | Status |
@@ -38,7 +38,7 @@ Eden-NS2's own README follows below this section.
 
 - Get the APK from this repo's **Releases** page only, and check its SHA-256 against the one in the release notes.
 - It installs as `dev.eden.nx2` ("Eden NX2A"), alongside the official Eden app, and keeps its own settings and saves.
-  v0.2.1 installs over earlier Eden NX2 versions and keeps your settings.
+  v0.2.2 installs over earlier Eden NX2 versions and keeps your settings.
 - It needs an arm64 device on Android 13 or newer. **RAM:** 16 GB is recommended; 12 GB may work for lighter games.
   DK Bananza peaks at about 6 GB for the app.
 - **GPU driver:** on Adreno GPUs the app ships Mr. Purple's Turnip T30 (Mesa, MIT licence, 3.7 MB) and selects it on
@@ -58,7 +58,7 @@ supported for Switch 2 titles.
 4. If the app finds several (for example base and an update), pick one from the list. The newest update is listed first.
 5. Loading sits on a black screen for a while. That alone is not a hang.
 
-Default settings: CPU backend **Dynarmic**, GPU mode **Fast**, async presentation **off**, resolution **0.5x**,
+Default settings: CPU backend **Dynarmic**, GPU mode **Fast**, async presentation **off**, resolution **1x**,
 asynchronous shaders **on**. Switch 2 games switch to the memory layout **12GB (Switch 2, Unsafe)** on their own.
 Keys and firmware are not needed for loose Switch 2 titles.
 
@@ -82,7 +82,7 @@ than one thread. To try other values, put `KEY=VALUE` lines in `Android/data/dev
 - **Driver:** check that the Turnip driver is selected (Settings → GPU driver manager).
 - If it still hangs, share `Android/data/dev.eden.nx2/files/log/eden_log.txt` and your phone model, RAM and driver.
 
-**Low frame rate.** Keep resolution 0.5x and asynchronous shaders on, close other apps, and let the phone cool down.
+**Low frame rate.** Keep asynchronous shaders on, close other apps, and let the phone cool down.
 Skip in-game videos where the game allows it: they play at the game's frame rate.
 
 **A game reaches a black screen and nothing happens for many minutes.** Check the dump: Switch 2 dumps with damaged
@@ -108,7 +108,8 @@ different game if a launch misbehaves.
 ### Known problems
 
 - **Low frame rate**: about 5-20 FPS in DK Bananza, around 20 FPS in Pokopia; being investigated.
-- **Mario Kart World 1.0.0** does not boot. Newer updates are untested.
+- **Mario Kart World 1.0.0** boots and races, but some shaders are not supported yet (dark road, missing surfaces), some
+  frames in races flicker, and it can crash with a GPU error while a course loads. Newer updates are untested.
 - **First loads** take minutes while shaders are built; later loads are faster.
 - **Stock Qualcomm driver:** two pipelines fail to build, so parts of the scene (DK Bananza's ground) are missing.
 - **Videos** may play slowly.
@@ -133,8 +134,8 @@ different game if a launch misbehaves.
   one host GPU wait (`EDEN_NX2_PBFLUSH_AHEAD`, `EDEN_NX2_PBFLUSH_BATCH`).
 - **GPU thread split on phones:** fewer front-thread waits (per-call-site drain counts, acquires and binds that skip the
   drain, `EDEN_NX2_DMAREAD_EPOCH`), so the split is on by default on Android too.
-- **Fixes:** a crash on unmapped texture buffers (Pokopia), and the first steps of Mario Kart World 1.0.0's older SDK
-  (graphics boot flags, GPU session, display interface version 1).
+- **Fixes:** a crash on unmapped texture buffers (Pokopia), and Mario Kart World 1.0.0's older SDK (graphics boot
+  flags, GPU session and its address space partition queries, display interface version 1, output encoding 0x5).
 - **Shaders and video:** a multi-channel bindless 2D sample form in the shader lowering (Welcome Tour), Generic31Y/Z/W
   attributes, and faster video frame output.
 
