@@ -83,15 +83,9 @@ void GpuSplit::CheckOwner(const char* where) {
 GpuSplit GpuSplit::instance;
 
 void GpuSplit::MaybeStart(Core::System& system_) {
-    // Off by default on Android until the front's drains are cut down: there it ran slower
-    // than one thread (DK Bananza 2.5-5 FPS split, 7 FPS without).
     static const char mode = [] {
         const char* value = std::getenv("EDEN_NX2_SPLIT");
-#ifdef __ANDROID__
-        return value != nullptr ? value[0] : '0';
-#else
         return value != nullptr ? value[0] : '2';
-#endif
     }();
     const bool wanted = mode == '1' || mode == '2';
     if (!wanted || !Tegra::Nx2Program()) {

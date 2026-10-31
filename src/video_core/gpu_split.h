@@ -36,7 +36,6 @@ enum class DrainSite : u32;
 // On for Switch 2 titles with the 3D and compute engines' macros on the front, against copies of
 // the registers they read (Maxwell3D and KeplerCompute Front*), which sends the writes they make.
 // EDEN_NX2_SPLIT=1 keeps the macros on the back; EDEN_NX2_SPLIT=0 runs everything on one thread.
-// Android defaults to EDEN_NX2_SPLIT=0.
 class GpuSplit {
 public:
     static GpuSplit& Get() {

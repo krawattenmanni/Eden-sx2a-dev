@@ -93,14 +93,18 @@ inline void Nx2MarkFresh(u64 device_page) {
            Nx2FreshSlot(device_page).dmaread_epoch == g_nx2_dmaread_epoch;
 }
 
-// EDEN_NX2_DMAREAD_EPOCH=1 (off by default): a front macro's MME DMA read from pages flushed in
+// EDEN_NX2_DMAREAD_EPOCH=1 (on by default on Android, =0 turns it off): a front macro's MME DMA read from pages flushed in
 // the current epoch skips the drain, as the pushbuffer flush does. Its epoch also moves on with
 // each submit, semaphore release, 3D upload and report, cache flush or invalidation; only 3D
 // draws (shader stores) are assumed not to write what the macros read.
 [[nodiscard]] inline bool Nx2DmaReadEpoch() {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_DMAREAD_EPOCH");
+#ifdef __ANDROID__
+        return value == nullptr || value[0] != '0';
+#else
         return value != nullptr && value[0] == '1';
+#endif
     }();
     return enabled && Nx2Program();
 }
