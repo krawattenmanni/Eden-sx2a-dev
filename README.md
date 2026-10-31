@@ -62,6 +62,81 @@ needed for loose Switch 2 titles.
 - **Low frame rate:** about 12-16 FPS in DK Bananza on Turnip.
 - **Long black loading screens** before the first frame.
 
+### How it works
+
+Takoroka's eden-nx2 does the Switch 2 groundwork: the new services (`nx2:gsv`, vi2), the newer GPU's command and
+shader formats, and the loader. This section covers what this fork changed to get it running on Android.
+
+**CPU and memory**
+- **12 GB guest memory:** Switch 2 games need more memory than Switch 1 games. The fork adds 10 GB and 12 GB memory
+  layouts, gives Switch 2 processes a 16 GiB heap region, and lets heaps grow past the old 8 GiB limit. Switch 2
+  games switch to the 12 GB layout on their own.
+- **Fitting in a phone's RAM:** the first boots ran out of memory. A sampling allocation profiler
+  (`EDEN_NX2_ALLOC_PROFILE`) showed where the memory went, and three fixes followed:
+  - Dynarmic's per-block metadata moved from hash maps to vectors. It was over 1 GiB.
+  - Guest thread stacks are no longer zeroed. Zeroing touched 4 MiB per thread, about 490 MiB in total.
+  - Clearing guest memory now punches holes in the backing memory file instead of writing zeros, so clearing a
+    heap no longer allocates all of it.
+- **Dynarmic, not NCE:** layouts above 4 GB need Dynarmic.
+
+**GPU command processing**
+- **Macro JIT on arm64:** the GPU's macro programs (small programs the game uploads to the GPU, run here on the
+  CPU) only had an x86-64 JIT, so Android used the slow interpreter. The fork adds an arm64 backend built on
+  oaknut. It was fuzzed against the x86-64 JIT and the interpreter with 100,000 random programs and 0 mismatches,
+  and runs about 5x faster than the interpreter (`tools/nx2/jit_fuzz/`).
+- **Pushbuffer snapshots (`EDEN_NX2_PB_COPY`):** the game reuses and edits its GPU command buffers for the next
+  frame, sometimes before the emulated GPU has read them. Eden then ran garbage as commands and crashed. GPU command
+  lists are now copied when they are submitted.
+- **GPU memory maps in order:** maps and unmaps on the GPU's page table are applied in the order the GPU sees them.
+  Before, memory that was freed and then reused at the same address could lose its new mapping.
+- **Stalled channels:** pending GPU work is flushed when a channel starts waiting. Without that, the 3D and compute
+  channels could each wait on a fence the other had not submitted yet.
+
+**Shaders**
+- **Native shader lowering:** the newer GPU's instructions are lowered to ones Eden's shader recompiler
+  understands. The fork adds several missing forms (LDC, VOTE, MUFU, HSETP2, F2I, IMAD.X, LEA.HI and more).
+  `tools/nx2/lowertest` checks a folder of dumped shaders offline, and all 531-650 dumped DK Bananza shaders lower.
+- **Up to 32 storage buffers per stage:** Switch 2 compute shaders bind more than Eden's old limit of 16 (DK Bananza
+  binds 18). On Adreno and Mali the limit uses the plain, not the dynamic, storage buffer count.
+
+**The DLSS pass (purple screen)**
+- DK Bananza upscales with a DLSS-style pass: a compute shader that runs a neural network on the Switch 2 GPU's
+  tensor cores. It takes a low-resolution frame (for example 960x540) and writes the full window image (2880x1620).
+  Emulating those tensor-core instructions would take the host driver minutes to compile and seconds per frame, so
+  the shader is rejected.
+- In its place, a **bilinear stand-in** resizes the input image straight into the output, with a format conversion.
+  You lose the network's sharpening, but you get a picture.
+- The purple screen appears when the stand-in can't find those images. Their handles move between dispatches, so
+  fixed offsets broke. It now scans the shader's constant buffer: the largest colour image is the output, and the
+  largest smaller colour image with the same aspect ratio is the input. This fixed most purple screens, but some
+  still happen.
+
+**Destructible terrain (still black)**
+
+The terrain isn't fixed yet. Here is how far it got:
+1. **Invisible to drawn:** the terrain runs a culling pass through a geometry shader first. Eden skipped that draw
+   because the shader would not lower. The fork ported native geometry shader support from the Eden-NS2 fork and
+   added IMAD.X. It also fixed an upstream bug where only the X component of Generic31 counted as a generic
+   attribute. The pass now runs, and the terrain is drawn.
+2. **Drawn but black:** the culling pass writes per-chunk triangle counters and compacted index buffers to storage
+   buffers, but only to decide what is visible. The colour comes from a later pass.
+3. **Ruled out so far:**
+   - shader rejections
+   - skipped draws
+   - the passthrough attribute mask
+   - geometry shader storage tracking
+   - missing storage barriers (`EDEN_NX2_SSBO_BARRIER`)
+4. **Draw trace (`EDEN_NX2_DRAW_TRACE`):** across 6,000 draws, no later draw read the culling buffers. Next is
+   finding what consumes them: maybe a later frame, or another channel. Or the data stays in host GPU memory and is
+   never synced back to guest memory. The Eden-NS2 fork shows the same black terrain on NVIDIA PCs, so it is likely
+   not Adreno-specific.
+
+**Android app**
+- Loose dumps launch by real path through All files access, because content URIs can't reach the files next to
+  `exefs/main`. DLC is loaded from a `dlc/<title id>/<version>/romfs` folder next to the game.
+- `EDEN_NX2_*` switches are read from `files/nx2_env.txt` at app start, since Android apps have no environment
+  variables you can set.
+
 More detail and the full run log: [NX2_ANDROID.md](NX2_ANDROID.md). Licence: GPLv3 or later, same as Eden.
 Every release is built from the tagged commit in this repo.
 
