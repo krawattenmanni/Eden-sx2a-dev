@@ -5,6 +5,7 @@
 // SPDX-FileCopyrightText: 2021 Skyline Team and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -29,6 +30,17 @@
 #include "video_core/rasterizer_interface.h"
 
 namespace Service::Nvidia::Devices {
+
+namespace {
+// EDEN_NX2_NVDRV_TRACE=1 also logs address space layouts and the VA regions reported.
+bool AsTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_NVDRV_TRACE");
+        return value != nullptr && value[0] != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 nvhost_as_gpu::nvhost_as_gpu(Core::System& system_, Module& module_, NvCore::Container& core)
     : nvdevice{system_, Type::GpuAddressSpace}, module{module_}, container{core}, nvmap{core.GetNvMapFile()}, vm{},
@@ -242,6 +254,12 @@ NvResult nvhost_as_gpu::AllocAsEx(IoctlAllocAsEx& params) {
     LOG_DEBUG(Service_NVDRV, "called, flags={:#x}, as_fd={}, big_page_size={:#x}, reserved={:#x}, VA={:#x}/{:#x}/{:#x}",
               params.flags, params.as_fd, params.big_page_size, params.reserved,
               params.va_range_start, params.va_range_split, params.va_range_end);
+
+    if (AsTraceEnabled()) {
+        LOG_WARNING(Service_NVDRV, "trace: AllocAsEx fd={} flags={:#x} as_fd={} big_page_size={:#x} reserved={:#x} start={:#x} split={:#x} end={:#x}",
+                    m_fd, params.flags, params.as_fd, params.big_page_size, params.reserved,
+                    params.va_range_start, params.va_range_split, params.va_range_end);
+    }
 
     std::scoped_lock lock(mutex);
 
@@ -784,6 +802,12 @@ void nvhost_as_gpu::GetVARegionsImpl(IoctlGetVaRegions& params) {
     if (m_extended_abi && params.regions[1].pages == 0) {
         params.regions[1] = {};
         params.buf_size = sizeof(VaRegion);
+    }
+    if (AsTraceEnabled()) {
+        for (const auto& region : params.regions) {
+            LOG_WARNING(Service_NVDRV, "trace: VA region fd={} offset={:#x} page_size={:#x} pages={:#x}",
+                        m_fd, region.offset, region.page_size, region.pages);
+        }
     }
 }
 
