@@ -187,9 +187,9 @@ bool Puller::CanResumeNativeAcquire(DmaPusher& dma_pusher) const {
 bool Puller::ResumeNativeAcquire(DmaPusher& dma_pusher) {
     if (!native_acquire) return true;
     if (!CanResumeNativeAcquire(dma_pusher)) return false;
-    LOG_WARNING(HW_GPU, "Native channel resumed after semaphore: channel={}, address={:#x}, current={}, required={}",
-                dma_pusher.channel_state.bind_id, native_acquire->address,
-                dma_pusher.memory_manager.Read<u32>(native_acquire->address), native_acquire->value);
+    LOG_DEBUG(HW_GPU, "Native channel resumed after semaphore: channel={}, address={:#x}, current={}, required={}",
+              dma_pusher.channel_state.bind_id, native_acquire->address,
+              dma_pusher.memory_manager.Read<u32>(native_acquire->address), native_acquire->value);
     VideoCommon::TraceNativeQuery(5, dma_pusher.memory_manager.GetID(), native_acquire->address,
         dma_pusher.memory_manager.GpuToCpuAddress(native_acquire->address).value_or(0),
         dma_pusher.memory_manager.Read<u32>(native_acquire->address), native_acquire->value,
@@ -273,8 +273,8 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                             dma_pusher.memory_manager.GpuToCpuAddress(native_acquire->address).value_or(0),
                             word, native_acquire->value, native_acquire->operation |
                             (dma_pusher.channel_state.bind_id << 8));
-                        LOG_WARNING(HW_GPU, "Native channel suspended for semaphore: channel={}, address={:#x}, current={}, required={}",
-                                    dma_pusher.channel_state.bind_id, native_acquire->address, word, native_acquire->value);
+                        LOG_DEBUG(HW_GPU, "Native channel suspended for semaphore: channel={}, address={:#x}, current={}, required={}",
+                                  dma_pusher.channel_state.bind_id, native_acquire->address, word, native_acquire->value);
                     }
                 }
                 break;
