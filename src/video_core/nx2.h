@@ -62,9 +62,13 @@ inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
 // memory other than 3D draws; a page drained and flushed in the current epoch is read again
 // without a drain (EDEN_NX2_PBFLUSH_EPOCH, EDEN_NX2_DMAREAD_EPOCH).
 inline u64 g_nx2_writer_epoch = 1;
+// EDEN_NX2_DMAREAD_EPOCH only: the other writers its reads also wait for. Kept apart so these
+// don't make the pushbuffer flush drain again.
+inline u64 g_nx2_dmaread_epoch = 1;
 struct Nx2FreshPage {
     u64 device_page;
     u64 epoch;
+    u64 dmaread_epoch;
 };
 inline std::array<Nx2FreshPage, 256> g_nx2_fresh_pages{};
 
@@ -72,15 +76,27 @@ inline Nx2FreshPage& Nx2FreshSlot(u64 device_page) {
     return g_nx2_fresh_pages[device_page % g_nx2_fresh_pages.size()];
 }
 
+/// The page was drained and flushed now.
+inline void Nx2MarkFresh(u64 device_page) {
+    Nx2FreshSlot(device_page) = {device_page, g_nx2_writer_epoch, g_nx2_dmaread_epoch};
+}
+
+/// Flushed since the front last sent work to an engine other than 3D (pushbuffer words).
 [[nodiscard]] inline bool Nx2IsFresh(u64 device_page) {
     const Nx2FreshPage& slot = Nx2FreshSlot(device_page);
     return slot.device_page == device_page && slot.epoch == g_nx2_writer_epoch;
 }
 
+/// Also flushed since the last of the other writers EDEN_NX2_DMAREAD_EPOCH counts.
+[[nodiscard]] inline bool Nx2IsFreshForDmaRead(u64 device_page) {
+    return Nx2IsFresh(device_page) &&
+           Nx2FreshSlot(device_page).dmaread_epoch == g_nx2_dmaread_epoch;
+}
+
 // EDEN_NX2_DMAREAD_EPOCH=1 (off by default): a front macro's MME DMA read from pages flushed in
-// the current epoch skips the drain, as the pushbuffer flush does. The epoch then also moves on
-// with each submit, semaphore release, 3D upload and report, cache flush or invalidation; only
-// 3D draws (shader stores) are assumed not to write what the macros read.
+// the current epoch skips the drain, as the pushbuffer flush does. Its epoch also moves on with
+// each submit, semaphore release, 3D upload and report, cache flush or invalidation; only 3D
+// draws (shader stores) are assumed not to write what the macros read.
 [[nodiscard]] inline bool Nx2DmaReadEpoch() {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_DMAREAD_EPOCH");
@@ -92,7 +108,7 @@ inline Nx2FreshPage& Nx2FreshSlot(u64 device_page) {
 /// Work that may write guest memory the DMA-read epoch doesn't otherwise see was sent.
 inline void Nx2DmaReadWriter() {
     if (Nx2DmaReadEpoch()) {
-        ++g_nx2_writer_epoch;
+        ++g_nx2_dmaread_epoch;
     }
 }
 

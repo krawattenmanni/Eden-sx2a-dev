@@ -901,7 +901,7 @@ void UnfreshPages(MemoryManager& memory, GPUVAddr address, size_t bytes) {
         if (const auto device = memory.GpuToCpuAddress(page)) {
             const u64 device_page = *device >> Nx2WrittenPageBits;
             if (Nx2IsFresh(device_page)) {
-                Nx2FreshSlot(device_page).epoch = 0;
+                Nx2FreshSlot(device_page).dmaread_epoch = 0;
             }
         }
     }
@@ -1202,7 +1202,7 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         fresh = true;
         for (GPUVAddr page = page_begin; page < page_end && fresh; page += 0x1000) {
             const auto device = memory_manager.GpuToCpuAddress(page);
-            fresh = device && Nx2IsFresh(*device >> Nx2WrittenPageBits);
+            fresh = device && Nx2IsFreshForDmaRead(*device >> Nx2WrittenPageBits);
         }
     }
     if (!fresh) {
@@ -1219,8 +1219,7 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         if (epoch) {
             for (GPUVAddr page = page_begin; page < page_end; page += 0x1000) {
                 if (const auto device = memory_manager.GpuToCpuAddress(page)) {
-                    const u64 device_page = *device >> Nx2WrittenPageBits;
-                    Nx2FreshSlot(device_page) = {device_page, g_nx2_writer_epoch};
+                    Nx2MarkFresh(*device >> Nx2WrittenPageBits);
                 }
             }
         }

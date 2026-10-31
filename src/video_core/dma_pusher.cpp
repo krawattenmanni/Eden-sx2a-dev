@@ -520,8 +520,7 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu
     if (epoch) {
         for (GPUVAddr page = flush_begin; page < flush_end; page += 0x1000) {
             if (const auto device = memory_manager.GpuToCpuAddress(page)) {
-                const u64 device_page = *device >> Nx2WrittenPageBits;
-                Nx2FreshSlot(device_page) = {device_page, g_nx2_writer_epoch};
+                Nx2MarkFresh(*device >> Nx2WrittenPageBits);
             }
         }
     }
