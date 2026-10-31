@@ -82,10 +82,11 @@ TEST_CASE("Graphics supervisor local bootstrap excludes remote memory requests",
 
 TEST_CASE("Graphics supervisor accepts the supported display interface versions", "[graphics-supervisor]") {
     using Service::AM::GraphicsSupervisorProtocol::IsSupportedDisplaySession;
+    REQUIRE(IsSupportedDisplaySession(0x300010000ULL));
     REQUIRE(IsSupportedDisplaySession(0x300020000ULL));
     REQUIRE(IsSupportedDisplaySession(0x300030000ULL));
     REQUIRE(IsSupportedDisplaySession(0x300040000ULL));
-    for (u64 flags : {0ULL, 0x300020001ULL, 0x300040001ULL, 0x300030001ULL, 0x400040000ULL}) {
+    for (u64 flags : {0ULL, 0x300000000ULL, 0x300020001ULL, 0x300040001ULL, 0x300030001ULL, 0x400040000ULL}) {
         REQUIRE_FALSE(IsSupportedDisplaySession(flags));
     }
 }

@@ -223,8 +223,9 @@ constexpr std::optional<EventSupervisorBind> DecodeEventSupervisorBind(std::span
     return EventSupervisorBind{(static_cast<u64>(packet[3]) << 32) | packet[2], packet[4]};
 }
 
+// Version 1 (0x300010000) comes from older SDKs (Mario Kart World 1.0.0).
 constexpr bool IsSupportedDisplaySession(u64 flags) {
-    return flags == 0x300020000ULL || flags == 0x300030000ULL ||
+    return flags == 0x300010000ULL || flags == 0x300020000ULL || flags == 0x300030000ULL ||
            flags == 0x300040000ULL;
 }
 
