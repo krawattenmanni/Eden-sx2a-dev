@@ -112,7 +112,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(DrainSite::Count)> 
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 8> counters{}; ///< See Counter
+    std::array<u64, 12> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{}; ///< Drains that waited
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
@@ -164,6 +164,10 @@ enum class Counter : u32 {
     SameValueWrites, ///< Of MethodWrites: the register already held the value
     AcquireChecks,  ///< Semaphore acquires evaluated
     AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
+    HostFinishes,   ///< Waits for the host GPU to go idle (Vulkan Scheduler::Finish)
+    AheadDownloads, ///< DmaPusher::FlushGpuWrittenAhead calls that downloaded pages
+    AheadFinishes,  ///< Of HostFinishes: in those calls
+    AheadDownloadNs, ///< Time of those calls
 };
 
 /// Device pages (4 KiB) the native MME has DMA-read since start (GPU thread only; filled only
@@ -177,6 +181,10 @@ inline void Add(Counter counter, u64 amount) {
     if (Enabled()) {
         t_data.counters[static_cast<size_t>(counter)] += amount;
     }
+}
+
+inline u64 Get(Counter counter) {
+    return t_data.counters[static_cast<size_t>(counter)];
 }
 
 /// A drain of the split GPU thread that waited `ns` (front thread).
@@ -231,6 +239,14 @@ inline void Report(const char* thread_name = "GPU thread") {
     line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
+    line += fmt::format(" | host finishes {:.0f}", static_cast<double>(data.counters[8]) * 1e9 / window);
+    if (data.counters[9] != 0) {
+        line += fmt::format(" | pbflush ahead downloads {:.0f} ({:.0f} finishes, {:.0f} us each)",
+                            static_cast<double>(data.counters[9]) * 1e9 / window,
+                            static_cast<double>(data.counters[10]) * 1e9 / window,
+                            static_cast<double>(data.counters[11]) / 1000.0 /
+                                static_cast<double>(data.counters[9]));
+    }
     std::string drains;
     for (size_t i = 0; i < data.drain_count.size(); ++i) {
         if (data.drain_count[i] != 0) {

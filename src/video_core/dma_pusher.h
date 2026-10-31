@@ -9,6 +9,7 @@
 #include <array>
 #include <condition_variable>
 #include <span>
+#include <utility>
 #include <vector>
 #include <boost/container/small_vector.hpp>
 #include <queue>
@@ -181,6 +182,7 @@ private:
     size_t command_resume_offset{};
     std::vector<u32> gpu_written_words; ///< A snapshot with GPU-written words read over it
     std::vector<GPUVAddr> ahead_pages;  ///< FlushGpuWrittenAhead's pages
+    std::vector<std::pair<GPUVAddr, size_t>> ahead_runs; ///< and the dirty runs of them
     u64 ahead_epoch{};                  ///< Writer epoch of the last FlushGpuWrittenAhead
     const CommandList* ahead_list{};    ///< and its list
     size_t ahead_end{};                 ///< and the end of the entries it read

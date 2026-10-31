@@ -251,6 +251,9 @@ public:
 
     void DownloadMemory(DAddr device_addr, u64 size);
 
+    /// DownloadMemory for several ranges with one wait for the GPU.
+    void DownloadMemoryRanges(std::span<const std::pair<DAddr, u64>> ranges);
+
     /// Makes a storage buffer pointer in guest memory current before it is read: GPU-driven
     /// dispatches have their pointer arguments written by earlier GPU work, which only the
     /// cached buffer holds until it is downloaded.

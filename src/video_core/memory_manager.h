@@ -10,6 +10,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 #include <boost/container/small_vector.hpp>
 
@@ -147,6 +149,9 @@ public:
 
     void FlushRegion(GPUVAddr gpu_addr, size_t size,
                      VideoCommon::CacheType which = VideoCommon::CacheType::All) const;
+
+    /// FlushRegion of the buffer cache for several regions, with one wait for the host GPU.
+    void FlushBufferRegions(std::span<const std::pair<GPUVAddr, size_t>> regions) const;
 
     void InvalidateRegion(GPUVAddr gpu_addr, size_t size,
                           VideoCommon::CacheType which = VideoCommon::CacheType::All) const;

@@ -46,7 +46,7 @@ struct PbFlushStats {
     std::array<std::atomic<u64>, 6> stale_epoch{};
     std::atomic<u64> stale_other{}; ///< Stale hits on a page not in the fresh table
     std::atomic<u64> ahead_pages{}; ///< Dirty pages FlushGpuWrittenAhead flushed
-    std::atomic<u64> ahead_runs{};  ///< Contiguous runs of them (one download each)
+    std::atomic<u64> ahead_runs{};  ///< Contiguous runs of them
 };
 PbFlushStats g_pbflush_stats;
 // The engine of the last method that moved the writer epoch (EDEN_NX2_PBFLUSH_STATS).
@@ -82,6 +82,13 @@ bool PbFlushEpochEnabled() {
 bool PbFlushAheadEnabled() {
     static const bool enabled = Nx2EnvDefaultOn("EDEN_NX2_PBFLUSH_AHEAD");
     return enabled && PbFlushEpochEnabled();
+}
+
+// EDEN_NX2_PBFLUSH_BATCH (on by default, =0 off): FlushGpuWrittenAhead downloads all its runs
+// with one wait for the host GPU instead of one wait per run (or per page of it).
+bool PbFlushBatchEnabled() {
+    static const bool enabled = Nx2EnvDefaultOn("EDEN_NX2_PBFLUSH_BATCH");
+    return enabled;
 }
 
 void ReportPbFlushStats() {
@@ -618,34 +625,46 @@ void DmaPusher::FlushGpuWrittenAhead() {
     const auto [unique_end, sentinel] = std::ranges::unique(ahead_pages);
     ahead_pages.erase(unique_end, sentinel);
     // Only dirty pages are flushed and marked fresh: a clean page's entries keep their submit
-    // snapshot, as when they drain on their own. Adjacent dirty pages go in one download.
-    const bool stats = PbFlushStatsEnabled();
-    GPUVAddr run_begin = 0;
-    GPUVAddr run_end = 0;
-    const auto flush_run = [&] {
-        if (run_end == run_begin) {
-            return;
-        }
-        memory_manager.FlushRegion(run_begin, run_end - run_begin, VideoCommon::CacheType::BufferCache);
-        if (stats) {
-            g_pbflush_stats.ahead_pages.fetch_add((run_end - run_begin) / 0x1000, std::memory_order_relaxed);
-            g_pbflush_stats.ahead_runs.fetch_add(1, std::memory_order_relaxed);
-        }
-    };
+    // snapshot, as when they drain on their own. Adjacent dirty pages go in one run.
+    ahead_runs.clear();
     for (const GPUVAddr page : ahead_pages) {
         if (!memory_manager.IsMemoryDirty(page, 0x1000, VideoCommon::CacheType::BufferCache)) {
             continue;
         }
-        if (page != run_end) {
-            flush_run();
-            run_begin = page;
+        if (!ahead_runs.empty() && ahead_runs.back().first + ahead_runs.back().second == page) {
+            ahead_runs.back().second += 0x1000;
+        } else {
+            ahead_runs.emplace_back(page, 0x1000);
         }
-        run_end = page + 0x1000;
         if (const auto device = memory_manager.GpuToCpuAddress(page)) {
             Nx2MarkFresh(*device >> Nx2WrittenPageBits);
         }
     }
-    flush_run();
+    if (ahead_runs.empty()) {
+        return;
+    }
+    namespace Profile = VideoCommon::Nx2Profile;
+    const u64 start = Profile::Enabled() ? Profile::Now() : 0;
+    const u64 finishes = Profile::Get(Profile::Counter::HostFinishes);
+    if (PbFlushBatchEnabled()) {
+        memory_manager.FlushBufferRegions(ahead_runs);
+    } else {
+        for (const auto& [run_begin, run_size] : ahead_runs) {
+            memory_manager.FlushRegion(run_begin, run_size, VideoCommon::CacheType::BufferCache);
+        }
+    }
+    if (Profile::Enabled()) {
+        Profile::Add(Profile::Counter::AheadDownloads, 1);
+        Profile::Add(Profile::Counter::AheadFinishes,
+                     Profile::Get(Profile::Counter::HostFinishes) - finishes);
+        Profile::Add(Profile::Counter::AheadDownloadNs, Profile::Now() - start);
+    }
+    if (PbFlushStatsEnabled()) {
+        for (const auto& [run_begin, run_size] : ahead_runs) {
+            g_pbflush_stats.ahead_pages.fetch_add(run_size / 0x1000, std::memory_order_relaxed);
+        }
+        g_pbflush_stats.ahead_runs.fetch_add(ahead_runs.size(), std::memory_order_relaxed);
+    }
 }
 
 void DmaPusher::ReadGpuWrittenWords(GPUVAddr address, std::span<u32> words) const {

@@ -239,6 +239,62 @@ void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
 }
 
 template <class P>
+void BufferCache<P>::DownloadMemoryRanges(std::span<const std::pair<DAddr, u64>> ranges) {
+    // Copies of one buffer stay adjacent, so each buffer takes one copy command.
+    boost::container::small_vector<BufferId, 16> copy_buffers;
+    boost::container::small_vector<BufferCopy, 16> copies;
+    u64 total_size_bytes = 0;
+    for (const auto& [device_addr, size] : ranges) {
+        ForEachBufferInRange(device_addr, size, [&](BufferId buffer_id, Buffer& buffer) {
+            const DAddr buffer_addr = buffer.CpuAddr();
+            const DAddr begin = (std::max)(device_addr, buffer_addr);
+            const DAddr end = (std::min)(device_addr + size, buffer_addr + buffer.SizeBytes());
+            if (begin >= end) {
+                return;
+            }
+            memory_tracker.ForEachDownloadRangeAndClear(
+                begin, end - begin, [&](u64 device_addr_out, u64 range_size) {
+                    gpu_modified_ranges.ForEachInRange(
+                        device_addr_out, range_size, [&](DAddr start, DAddr stop) {
+                            copy_buffers.push_back(buffer_id);
+                            copies.push_back(BufferCopy{
+                                .src_offset = start - buffer_addr,
+                                .dst_offset = total_size_bytes,
+                                .size = stop - start,
+                            });
+                            total_size_bytes += Common::AlignUp(stop - start, 64);
+                        });
+                    ClearDownload(device_addr_out, range_size);
+                    gpu_modified_ranges.Subtract(device_addr_out, range_size);
+                });
+        });
+    }
+    if (total_size_bytes == 0) {
+        return;
+    }
+    auto download_staging = runtime.DownloadStagingBuffer(total_size_bytes);
+    for (size_t first = 0; first < copies.size();) {
+        Buffer& buffer = slot_buffers[copy_buffers[first]];
+        size_t next = first;
+        for (; next < copies.size() && copy_buffers[next] == copy_buffers[first]; ++next) {
+            copies[next].dst_offset += download_staging.offset;
+            buffer.MarkUsage(copies[next].src_offset, copies[next].size);
+        }
+        runtime.CopyBuffer(download_staging.buffer, buffer,
+                           std::span{copies.data() + first, next - first}, true);
+        first = next;
+    }
+    runtime.Finish();
+    const u8* const mapped_memory = download_staging.mapped_span.data();
+    for (size_t i = 0; i < copies.size(); ++i) {
+        const BufferCopy& copy = copies[i];
+        device_memory.WriteBlockUnsafe(slot_buffers[copy_buffers[i]].CpuAddr() + copy.src_offset,
+                                       mapped_memory + (copy.dst_offset - download_staging.offset),
+                                       copy.size);
+    }
+}
+
+template <class P>
 void BufferCache<P>::SynchronizeStoragePointer(GPUVAddr pointer_address) {
     if (const auto device_addr = gpu_memory->GpuToCpuAddress(pointer_address);
         device_addr && IsRegionGpuModified(*device_addr, sizeof(u64))) {

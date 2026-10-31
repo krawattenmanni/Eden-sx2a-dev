@@ -529,6 +529,35 @@ void MemoryManager::FlushRegion(GPUVAddr gpu_addr, size_t size,
     MemoryOperation(gpu_addr, size, true, mapped_big, do_nothing, flush_short_pages);
 }
 
+void MemoryManager::FlushBufferRegions(std::span<const std::pair<GPUVAddr, size_t>> regions) const {
+    boost::container::small_vector<std::pair<DAddr, u64>, 16> device_regions;
+    const auto add = [&](DAddr dev_addr, std::size_t size) {
+        if (!device_regions.empty() &&
+            device_regions.back().first + device_regions.back().second == dev_addr) {
+            device_regions.back().second += size;
+        } else {
+            device_regions.emplace_back(dev_addr, size);
+        }
+    };
+    auto do_nothing = [&]([[maybe_unused]] std::size_t page_index,
+                          [[maybe_unused]] std::size_t offset,
+                          [[maybe_unused]] std::size_t copy_amount) {};
+    auto mapped_normal = [&](std::size_t page_index, std::size_t offset, std::size_t copy_amount) {
+        add((DAddr(page_table[page_index]) << cpu_page_bits) + offset, copy_amount);
+    };
+    auto mapped_big = [&](std::size_t page_index, std::size_t offset, std::size_t copy_amount) {
+        add((DAddr(big_page_table_dev[page_index]) << cpu_page_bits) + offset, copy_amount);
+    };
+    auto flush_short_pages = [&](std::size_t page_index, std::size_t offset, std::size_t copy_amount) {
+        GPUVAddr base = (page_index << big_page_bits) + offset;
+        MemoryOperation(base, copy_amount, false, mapped_normal, do_nothing, do_nothing);
+    };
+    for (const auto& [gpu_addr, size] : regions) {
+        MemoryOperation(gpu_addr, size, true, mapped_big, do_nothing, flush_short_pages);
+    }
+    rasterizer->FlushBufferRegions(device_regions);
+}
+
 bool MemoryManager::IsMemoryDirty(GPUVAddr gpu_addr, size_t size,
                                   VideoCommon::CacheType which) const {
     bool result = false;
