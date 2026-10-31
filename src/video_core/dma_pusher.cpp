@@ -341,6 +341,10 @@ void DmaPusher::CallMethod(u32 argument) {
         });
     } else {
         auto subchannel = subchannels[dma_state.subchannel];
+        if (subchannel == nullptr) {
+            ReportUnboundSubchannel();
+            return;
+        }
         if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
             ++g_writer_epoch;
         }
@@ -383,6 +387,10 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         puller.CallMultiMethod(*this, dma_state.method, dma_state.subchannel, base_start, num_methods, dma_state.method_count);
     } else {
         auto subchannel = subchannels[dma_state.subchannel];
+        if (subchannel == nullptr) {
+            ReportUnboundSubchannel();
+            return;
+        }
         if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
             ++g_writer_epoch;
         }
@@ -413,6 +421,15 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         subchannel->ConsumeSink(system);
         subchannel->current_dma_segment = dma_state.dma_get + dma_state.dma_word_offset;
         subchannel->CallMultiMethod(system, dma_state.method, base_start, num_methods, dma_state.method_count);
+    }
+}
+
+void DmaPusher::ReportUnboundSubchannel() const {
+    // Methods sent to a subchannel with no engine (no SetObject yet) are dropped.
+    static std::atomic<u32> reported{};
+    if (reported.fetch_add(1) < 8) {
+        LOG_WARNING(HW_GPU, "Dropping method {:#x} on unbound subchannel {}", dma_state.method,
+                    dma_state.subchannel);
     }
 }
 

@@ -151,6 +151,7 @@ private:
     static void FailedNativeWorkHook(void* dma_pusher);
     /// Whether the current method carries a DMA segment its engine reads.
     [[nodiscard]] bool WantsSegment() const;
+    void ReportUnboundSubchannel() const;
     bool Step();
     size_t ProcessCommands(std::span<const CommandHeader> commands, size_t word_offset = 0);
     /// Brings command list words the GPU wrote (still only in host buffers) to guest memory.
