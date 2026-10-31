@@ -415,8 +415,8 @@ private:
             second = u64{packet[4]} | (u64{packet[5]} << 32);
             result = ResultSuccess;
         }
-        LOG_INFO(Service_AM, "native session 1121 command 11 (probe) args={:#x}, {:#x}, result={:#x}",
-                 first, second, result.raw);
+        LOG_DEBUG(Service_AM, "native session 1121 command 11 (probe) args={:#x}, {:#x}, result={:#x}",
+                  first, second, result.raw);
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(result.raw);
         rb.Push<u64>(0);
@@ -944,8 +944,8 @@ private:
             });
             system.CoreTiming().ScheduleLoopingEvent(std::chrono::milliseconds{1}, std::chrono::milliseconds{1}, m_release_poll);
         }
-        LOG_INFO(Service_AM, "Native image queued for display: image={}, slot={}, fence={}/{}, dimensions={}x{}",
-                 image->id, slot, fence_id, packet[24], native->width, native->height);
+        LOG_DEBUG(Service_AM, "Native image queued for display: image={}, slot={}, fence={}/{}, dimensions={}x{}",
+                  image->id, slot, fence_id, packet[24], native->width, native->height);
         R_SUCCEED();
     }
     void PresentClientBuffer(HLERequestContext& ctx) {
