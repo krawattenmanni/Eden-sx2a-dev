@@ -7,11 +7,29 @@
 > **This is an unofficial, experimental fork. It is not Eden, and the Eden team does not support it.**
 > Please do not report problems from this build to the Eden project or Takoroka.
 
+## Compatibility
+
+| Game | Version | Status |
+| --- | --- | --- |
+| Donkey Kong Bananza (`040074A01BF12000`) | update 458752 | **Playable.** Terrain renders. Low frame rate, long loading. No main menu wallpaper. |
+| Pokémon Pokopia | 2.0.1 | Untested |
+| Other Switch 2 games | - | Untested |
+
+| Device | GPU driver | Status |
+| --- | --- | --- |
+| Honor foldable, Snapdragon SM8850 (Adreno 840), 16 GB RAM | Mr. Purple Turnip T30 | Tested |
+| Same phone | Qualcomm 512.842.44 | Boots, less tested |
+| Phones with less than 16 GB RAM | - | Likely killed by Android while loading (the app uses about 5 GB including swap) |
+| Mali, PowerVR or other non-Adreno GPUs | - | Untested |
+
 ## Eden NX2 for Android
 
 This fork brings [Takoroka's eden-nx2](https://git.eden-emu.dev/Takoroka/eden-nx2) (experimental Switch 2
 support, Windows-only) to Eden's Android app. Takoroka wrote the Switch 2 work underneath. This fork adds
 the Android port, the loose dump loader, and fixes found while running Donkey Kong Bananza on a Snapdragon phone.
+
+Since v0.2 this fork also follows [Eden-NS2](https://github.com/0x2593/Eden-NS2) (0x2593's Switch 2 fork) and ports
+its fixes one at a time. The DK Bananza terrain fix comes from Eden-NS2.
 
 ### Install
 
@@ -32,9 +50,36 @@ Loose (extracted) dumps boot straight from their `exefs/main`. Dumps in NSP, XCI
 4. If the app finds several (for example base and an update), pick one from the list. The newest update is listed first.
 5. Loading sits on a black screen for a while. That alone is not a hang.
 
-Settings that work: memory layout **12GB (Switch 2, Unsafe)**, CPU backend **Dynarmic**, GPU mode **Fast**,
-async presentation **off** (see [NX2_ANDROID.md](NX2_ANDROID.md) for how to set it). Keys and firmware are not
+Settings that work, and since v0.2 the app's defaults: CPU backend **Dynarmic**, GPU mode **Fast**, async
+presentation **off**, resolution **0.5x**, asynchronous shaders **on**. Switch 2 games switch to the memory layout
+**12GB (Switch 2, Unsafe)** on their own. Settings you changed yourself keep your value. Keys and firmware are not
 needed for loose Switch 2 titles.
+
+### Troubleshooting
+
+**The app closes on its own, with no error.** That is almost always Android's background (low-memory) killer, not a
+crash: DK Bananza needs about 5 GB, RAM plus swap.
+- Keep the game in front. Switching to another app, even briefly, makes Eden NX2 a background app, and it is the first
+  thing Android kills.
+- Close other apps before launching, especially browsers, games and social apps.
+- Turn off battery optimisation for Eden NX2 (Settings → Apps → Eden NX2 → Battery → Unrestricted). Some phones
+  also have their own "app freezer" or "smart memory" feature; exclude Eden NX2 there too.
+- Phones with less than 16 GB of RAM will likely not cope.
+
+**Black screen at 0 FPS after launching.**
+- **Wait.** Loading takes 2-3 minutes on a black screen before the first frame. That alone is not a hang.
+- **Keep the screen on and the app in front.** With the screen off or the app in the background, emulation waits.
+- **First boot:** DK Bananza asks for accessibility settings once. Press A on the on-screen controller.
+- **Settings:** memory layout **12GB (Switch 2, Unsafe)** and CPU backend **Dynarmic**. NCE does not work with the
+  big layouts.
+- **Wrong folder:** pick the folder that holds `exefs/` and `romfs/` (or a parent the app can search). Without
+  `romfs` the game can't load.
+- **GPU driver:** this build is tested with Mr. Purple Turnip T30 on Adreno 840. Try Turnip if the stock driver
+  hangs. Non-Adreno GPUs are untested.
+- If it still hangs, share `Android/data/dev.eden.nx2/files/log/eden_log.txt` and your phone model, RAM and driver.
+
+**Low frame rate.** Check that resolution is 0.5x and asynchronous shaders are on (the defaults). Close other apps, and let the phone cool
+down: it throttles when hot.
 
 ### Be careful about
 
@@ -56,10 +101,10 @@ needed for loose Switch 2 titles.
 ### Known problems
 
 - **Crashes**, including a crash when closing the app while the GPU thread split is on, and an occasional crash with async presentation on (keep it off).
-- **Destructible terrain draws solid black**: walls and much of the ground in DK Bananza. This is the main open bug.
-- **Purple screen:** sometimes the game switches to a purple screen, usually after heavy scenes, and only restarting the app fixes it.
+- **Memory:** the app needs about 5 GB (RAM plus swap) in DK Bananza. Phones with less RAM will likely see the app killed while loading.
+- **Purple screen:** fixed for the cases seen so far in v0.2, but report it if it comes back.
 - **No main menu wallpaper**, and Joy-Con colours are wrong in the UI.
-- **Low frame rate:** about 12-16 FPS in DK Bananza on Turnip.
+- **Low frame rate** in DK Bananza on Turnip.
 - **Long black loading screens** before the first frame.
 
 ### How it works
@@ -86,7 +131,8 @@ shader formats, and the loader. This section covers what this fork changed to ge
   and runs about 5x faster than the interpreter (`tools/nx2/jit_fuzz/`).
 - **Pushbuffer snapshots (`EDEN_NX2_PB_COPY`):** the game reuses and edits its GPU command buffers for the next
   frame, sometimes before the emulated GPU has read them. Eden then ran garbage as commands and crashed. GPU command
-  lists are now copied when they are submitted.
+  lists are now copied when they are submitted. In v0.1 this was only on with `nx2_env.txt`; since v0.2 it is on
+  by default for Switch 2 games.
 - **GPU memory maps in order:** maps and unmaps on the GPU's page table are applied in the order the GPU sees them.
   Before, memory that was freed and then reused at the same address could lose its new mapping.
 - **Stalled channels:** pending GPU work is flushed when a channel starts waiting. Without that, the 3D and compute
@@ -106,30 +152,25 @@ shader formats, and the loader. This section covers what this fork changed to ge
   the shader is rejected.
 - In its place, a **bilinear stand-in** resizes the input image straight into the output, with a format conversion.
   You lose the network's sharpening, but you get a picture.
-- The purple screen appears when the stand-in can't find those images. Their handles move between dispatches, so
-  fixed offsets broke. It now scans the shader's constant buffer: the largest colour image is the output, and the
-  largest smaller colour image with the same aspect ratio is the input. This fixed most purple screens, but some
-  still happen.
+- The purple screen appears when the stand-in can't find those images. v0.1 scanned the shader's constant buffer
+  for image handles, which only worked by luck. DK Bananza also has a second upscaler program that renders at
+  dynamic resolution (about 1396x785 into 1920x1080). Since v0.2 the stand-in takes the images from the program's own
+  texture and surface instructions, honours the dynamic-resolution crop, and skips the pass instead of failing when it
+  finds nothing.
 
-**Destructible terrain (still black)**
-
-The terrain isn't fixed yet. Here is how far it got:
+**Destructible terrain (fixed in v0.2)**
 1. **Invisible to drawn:** the terrain runs a culling pass through a geometry shader first. Eden skipped that draw
    because the shader would not lower. The fork ported native geometry shader support from the Eden-NS2 fork and
    added IMAD.X. It also fixed an upstream bug where only the X component of Generic31 counted as a generic
-   attribute. The pass now runs, and the terrain is drawn.
-2. **Drawn but black:** the culling pass writes per-chunk triangle counters and compacted index buffers to storage
-   buffers, but only to decide what is visible. The colour comes from a later pass.
-3. **Ruled out so far:**
-   - shader rejections
-   - skipped draws
-   - the passthrough attribute mask
-   - geometry shader storage tracking
-   - missing storage barriers (`EDEN_NX2_SSBO_BARRIER`)
-4. **Draw trace (`EDEN_NX2_DRAW_TRACE`):** across 6,000 draws, no later draw read the culling buffers. Next is
-   finding what consumes them: maybe a later frame, or another channel. Or the data stays in host GPU memory and is
-   never synced back to guest memory. The Eden-NS2 fork shows the same black terrain on NVIDIA PCs, so it is likely
-   not Adreno-specific.
+   attribute.
+2. **Drawn but black:** the culling pass writes each terrain chunk's indirect draw record to GPU memory, and the
+   game then passes those words back to the GPU as command-list parameters. Eden read them from stale guest memory
+   (or from the pushbuffer snapshot taken at submit time), so the draws got the wrong arguments. Following
+   Eden-NS2, pages the GPU writes are now tracked, and command words on them are flushed from the host GPU before
+   they run (`EDEN_NX2_PBFLUSH`). A related Eden-NS2 fix does the stores of the program that resets those records.
+3. **Keeping it fast:** a flush has to wait for the GPU thread split's back half to catch up. Waiting for every
+   such command took DK Bananza to 2.5 FPS. Now a page flushed since the last compute or copy work is read without
+   waiting again (`EDEN_NX2_PBFLUSH_EPOCH`), which removes about 95% of the waits.
 
 **Android app**
 - Loose dumps launch by real path through All files access, because content URIs can't reach the files next to

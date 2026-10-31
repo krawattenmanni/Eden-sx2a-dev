@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 #include <vector>
 
@@ -16,6 +17,69 @@ namespace Tegra {
 // Set once a Switch 2 (Ampere, NVN2) driver is talking to the GPU. Its command streams use
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
+
+/// Parses a switch that is on unless NAME=0. Callers cache the result and also check
+/// g_nx2_ampere, so Switch 1 programs never see it on.
+[[nodiscard]] inline bool Nx2EnvDefaultOn(const char* name) {
+    const char* value = std::getenv(name);
+    return value == nullptr || value[0] != '0';
+}
+
+// Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Donkey
+// Kong Bananza's culling pass fills in words its pushbuffer then executes (indirect draw records
+// consumed as macro parameters); read without a flush they hold older words. The bits never
+// clear: the work that rewrites a page may still be queued on the split's back when its front
+// reads the command list. One bit per 4 KiB of the 36-bit device address space (2 MiB).
+inline constexpr u64 Nx2WrittenPageBits = 12;
+inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_gpu_written_pages{};
+
+enum class Nx2WriteSource : u32 { Shader, Copy };
+/// Pages newly marked by each source, for EDEN_NX2_PBFLUSH_STATS.
+inline std::array<std::atomic<u64>, 2> g_nx2_written_pages_marked{};
+
+inline void Nx2MarkGpuWritten(u64 device_address, u64 size, Nx2WriteSource source) {
+    if (size == 0) {
+        return;
+    }
+    const u64 last = (std::min)((device_address + size - 1) >> Nx2WrittenPageBits,
+                                u64{g_nx2_gpu_written_pages.size()} * 64 - 1);
+    u64 marked = 0;
+    for (u64 page = device_address >> Nx2WrittenPageBits; page <= last; ++page) {
+        auto& word = g_nx2_gpu_written_pages[page / 64];
+        const u64 bit = u64{1} << (page % 64);
+        if ((word.load(std::memory_order_relaxed) & bit) == 0) {
+            word.fetch_or(bit, std::memory_order_relaxed);
+            ++marked;
+        }
+    }
+    if (marked != 0) {
+        g_nx2_written_pages_marked[static_cast<u32>(source)].fetch_add(marked, std::memory_order_relaxed);
+    }
+}
+
+/// Whether buffer copies mark pages too (EDEN_NX2_PBFLUSH_COPY_MARK=0: only shader stores do).
+[[nodiscard]] inline bool Nx2MarkCopies() {
+    static const bool mark = [] {
+        const char* value = std::getenv("EDEN_NX2_PBFLUSH_COPY_MARK");
+        return value == nullptr || value[0] != '0';
+    }();
+    return mark;
+}
+
+/// A new emulation session starts: no page has been written by its GPU yet.
+inline void Nx2ClearGpuWrittenPages() {
+    for (auto& word : g_nx2_gpu_written_pages) {
+        word.store(0, std::memory_order_relaxed);
+    }
+}
+
+[[nodiscard]] inline bool Nx2IsGpuWritten(u64 device_address) {
+    const u64 page = device_address >> Nx2WrittenPageBits;
+    if (page >= u64{g_nx2_gpu_written_pages.size()} * 64) {
+        return false;
+    }
+    return (g_nx2_gpu_written_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
+}
 
 // NVN2 queues release their progress values into the second page of a two-page GPU-accessible
 // region and GPU acquires read the same offsets in the first page (the CPU polls the second).

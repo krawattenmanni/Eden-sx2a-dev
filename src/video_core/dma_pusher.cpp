@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <string>
@@ -30,6 +31,147 @@ namespace Tegra {
 
 constexpr u32 MacroRegistersStart = 0xE00;
 constexpr u32 ComputeInline = 0x6D;
+
+namespace {
+// EDEN_NX2_PBFLUSH_STATS=1: what the pushbuffer flush checks and what it costs, every 5 s.
+struct PbFlushStats {
+    std::atomic<u64> checked{};
+    std::array<std::atomic<u64>, 3> hits{}; ///< Entries on a GPU-written page: <=8, <=64, >64 words
+    std::atomic<u64> skipped{};             ///< Hits over EDEN_NX2_PBFLUSH_MAX, not flushed
+    std::atomic<u64> deferred{};            ///< Data-only entries handed to the split's back
+    std::atomic<u64> fresh{};               ///< Hits whose pages were flushed since the last writer
+    std::atomic<u64> drains{};
+    std::atomic<u64> flushes{};
+    std::atomic<u64> differing_words{};
+};
+PbFlushStats g_pbflush_stats;
+// Read on first use: Android sets the switches after the library is loaded.
+bool PbFlushStatsEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_PBFLUSH_STATS");
+        return value != nullptr && value[0] != '0';
+    }();
+    return enabled;
+}
+// Largest entry flushed, in words. The culling pass's draw records are 5-word entries; command
+// lists the CPU wrote are larger and their snapshot is right.
+size_t PbFlushMaxWords() {
+    static const size_t words = [] {
+        const char* value = std::getenv("EDEN_NX2_PBFLUSH_MAX");
+        return value != nullptr ? static_cast<size_t>(std::strtoull(value, nullptr, 0)) : size_t{64};
+    }();
+    return words;
+}
+
+// EDEN_NX2_PBFLUSH_EPOCH (on by default for Switch 2 programs, =0 off): an entry on pages flushed
+// (with a drain) since the front last sent work to an engine other than 3D is read without another
+// drain. Assumes the words are written by compute or copies, not by 3D draws.
+bool PbFlushEpochEnabled() {
+    static const bool enabled = Nx2EnvDefaultOn("EDEN_NX2_PBFLUSH_EPOCH");
+    return enabled && g_nx2_ampere.load(std::memory_order_relaxed);
+}
+// Front thread only. Bumped when work that may write GPU memory is sent.
+u64 g_writer_epoch = 1;
+struct FreshPage {
+    u64 device_page;
+    u64 epoch;
+};
+std::array<FreshPage, 256> g_fresh_pages{};
+
+FreshPage& FreshSlot(u64 device_page) {
+    return g_fresh_pages[device_page % g_fresh_pages.size()];
+}
+
+// A data-only entry whose consumer runs on the split's back: flushed, re-read and executed there.
+struct DeferredEntry {
+    static constexpr size_t MaxWords = 64;
+    Core::System* system;
+    MemoryManager* memory;
+    Engines::EngineInterface* engine;
+    GPUVAddr address;
+    u32 words;
+    u32 method;
+    u32 method_count;
+    bool non_incrementing;
+    bool increment_once;
+    bool wants_segment;
+    bool payload_dirty; ///< Refresh the engine's current_dirty after the flush
+    std::array<u32, MaxWords> data;
+};
+
+void RunDeferredEntry(const DeferredEntry& entry) {
+    MemoryManager& memory = *entry.memory;
+    const size_t bytes = size_t{entry.words} * sizeof(u32);
+    if (memory.IsMemoryDirty(entry.address, bytes, VideoCommon::CacheType::BufferCache)) {
+        memory.FlushRegion(entry.address, bytes, VideoCommon::CacheType::BufferCache);
+        g_pbflush_stats.flushes.fetch_add(1, std::memory_order_relaxed);
+    }
+    std::array<u32, DeferredEntry::MaxWords> words = entry.data;
+    const GPUVAddr end = entry.address + bytes;
+    for (GPUVAddr page = entry.address & ~GPUVAddr{0xfff}; page < end; page += 0x1000) {
+        const auto device = memory.GpuToCpuAddress(page);
+        if (!device || !Nx2IsGpuWritten(*device)) {
+            continue;
+        }
+        const GPUVAddr begin = (std::max)(page, entry.address);
+        const GPUVAddr stop = (std::min)(page + 0x1000, end);
+        memory.ReadBlockUnsafe(begin, words.data() + (begin - entry.address) / sizeof(u32), stop - begin);
+    }
+    if (PbFlushStatsEnabled()) {
+        size_t changed = 0;
+        for (u32 i = 0; i < entry.words; ++i) {
+            changed += words[i] != entry.data[i] ? 1 : 0;
+        }
+        g_pbflush_stats.differing_words.fetch_add(changed, std::memory_order_relaxed);
+    }
+    Engines::EngineInterface& engine = *entry.engine;
+    Core::System& system = *entry.system;
+    if (entry.payload_dirty) {
+        engine.current_dirty = memory.IsMemoryDirty(entry.address, bytes);
+    }
+    // What GpuSplit::Execute does with the Method and Multi entries ProcessCommands would send.
+    if (entry.non_incrementing) {
+        engine.ConsumeSink(system);
+        if (entry.wants_segment) {
+            engine.current_dma_segment = entry.address;
+        }
+        engine.CallMultiMethod(system, entry.method, words.data(), entry.words, entry.method_count);
+        return;
+    }
+    u32 method = entry.method;
+    bool non_incrementing = false;
+    for (u32 i = 0; i < entry.words; ++i) {
+        if (!engine.execution_mask[method]) {
+            engine.method_sink.emplace_back(method, words[i]);
+        } else {
+            engine.ConsumeSink(system);
+            if (entry.wants_segment) {
+                engine.current_dma_segment = entry.address + i * sizeof(u32);
+            }
+            engine.CallMethod(system, method, words[i], entry.method_count - i <= 1);
+        }
+        method += non_incrementing ? 0 : 1;
+        non_incrementing |= entry.increment_once;
+    }
+}
+
+void ReportPbFlushStats() {
+    using Clock = std::chrono::steady_clock;
+    static Clock::time_point last = Clock::now();
+    const auto now = Clock::now();
+    if (now - last < std::chrono::seconds{5}) {
+        return;
+    }
+    last = now;
+    auto& s = g_pbflush_stats;
+    const auto take = [](std::atomic<u64>& counter) { return counter.exchange(0, std::memory_order_relaxed); };
+    LOG_INFO(HW_GPU, "NX2 pbflush stats: checked {} hits <=8 {} <=64 {} >64 {} skipped {} deferred {} fresh {} drains {} flushes {} differing words {} (max {} words; new marked pages shader {} copy {})",
+             take(s.checked), take(s.hits[0]), take(s.hits[1]), take(s.hits[2]), take(s.skipped),
+             take(s.deferred), take(s.fresh), take(s.drains), take(s.flushes),
+             take(s.differing_words), PbFlushMaxWords(),
+             take(g_nx2_written_pages_marked[0]), take(g_nx2_written_pages_marked[1]));
+}
+} // Anonymous namespace
 
 DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
     : system{system_}
@@ -104,6 +246,19 @@ bool DmaPusher::Step() {
     }
 
     if (header.size > 0) {
+        // A resumed entry is read again: the words after the acquire may be new by now.
+        const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe();
+        const bool has_snapshot = dma_pushbuffer_subindex < command_list.submit_words.size();
+        // Words a culling pass wrote (indirect draw records consumed as macro parameters) may
+        // only be in host buffers. Safe reads flush on their own; snapshots and unsafe reads
+        // flush pages the GPU has written. EDEN_NX2_PBFLUSH=0 turns this off.
+        static const bool flush_commands = [] {
+            const char* value = std::getenv("EDEN_NX2_PBFLUSH");
+            return value == nullptr || value[0] != '0';
+        }();
+        const WrittenPages written_pages = flush_commands && (has_snapshot || !use_safe)
+                                               ? CheckGpuWrittenPages(dma_state.dma_get, header.size)
+                                               : WrittenPages::None;
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -155,10 +310,38 @@ bool DmaPusher::Step() {
                 CheckSubmitWords(header, command_list.submit_words[dma_pushbuffer_subindex]);
             }
         }
-        // A resumed entry is read again: the words after the acquire may be new by now.
-        const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe();
-        if (dma_pushbuffer_subindex < command_list.submit_words.size()) {
-            const auto& words = command_list.submit_words[dma_pushbuffer_subindex];
+        bool gpu_written = written_pages == WrittenPages::Fresh;
+        bool deferred = false;
+        if (written_pages == WrittenPages::Stale) {
+            const std::span<const u32> snapshot = has_snapshot
+                ? std::span<const u32>{command_list.submit_words[dma_pushbuffer_subindex]}
+                : std::span<const u32>{};
+            deferred = command_resume_offset == 0 && DeferGpuWrittenEntry(header, snapshot);
+            gpu_written = !deferred && FlushGpuWrittenCommands(dma_state.dma_get, header.size);
+        }
+        if (deferred) {
+            // Executed on the split's back.
+        } else if (has_snapshot) {
+            std::span<const u32> words{command_list.submit_words[dma_pushbuffer_subindex]};
+            if (gpu_written) {
+                // The snapshot predates the GPU work that writes these words: take the pages it
+                // wrote from guest memory, now flushed, and the rest from the snapshot.
+                gpu_written_words.assign(words.begin(), words.end());
+                ReadGpuWrittenWords(header.addr, gpu_written_words);
+                if (static std::atomic<u32> reported{};
+                    PbFlushStatsEnabled() || reported.load(std::memory_order_relaxed) < 5) {
+                    size_t changed = 0;
+                    for (size_t i = 0; i < words.size(); ++i) {
+                        changed += words[i] != gpu_written_words[i] ? 1 : 0;
+                    }
+                    g_pbflush_stats.differing_words.fetch_add(changed, std::memory_order_relaxed);
+                    if (changed != 0 && reported.fetch_add(1) < 5) {
+                        LOG_INFO(HW_GPU, "NX2 pbflush: pb copy entry {:#x}+{:#x} on ch {}: {} words on GPU-written pages differ from the submit snapshot",
+                                 header.addr.Value(), header.size.Value(), channel_state.bind_id, changed);
+                    }
+                }
+                words = gpu_written_words;
+            }
             const std::span<const CommandHeader> commands{
                 reinterpret_cast<const CommandHeader*>(words.data()), words.size()};
             RecordParsedEntry(header, commands);
@@ -359,6 +542,161 @@ bool DmaPusher::WantsSegment() const {
            (engine == Engines::EngineTypes::Maxwell3D && dma_state.method >= MacroRegistersStart);
 }
 
+DmaPusher::WrittenPages DmaPusher::CheckGpuWrittenPages(GPUVAddr address, size_t words) const {
+    if (!g_nx2_ampere.load(std::memory_order_relaxed) || words == 0) {
+        return WrittenPages::None;
+    }
+    if (PbFlushStatsEnabled()) {
+        ReportPbFlushStats();
+        g_pbflush_stats.checked.fetch_add(1, std::memory_order_relaxed);
+    } else if (words > PbFlushMaxWords()) {
+        return WrittenPages::None;
+    }
+    const bool epoch = PbFlushEpochEnabled();
+    bool written = false;
+    bool stale = false;
+    const GPUVAddr end = address + words * sizeof(u32);
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < end; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        if (!device || !Nx2IsGpuWritten(*device)) {
+            continue;
+        }
+        written = true;
+        const u64 device_page = *device >> Nx2WrittenPageBits;
+        const FreshPage& slot = FreshSlot(device_page);
+        if (!epoch || slot.device_page != device_page || slot.epoch != g_writer_epoch) {
+            stale = true;
+            break;
+        }
+    }
+    if (!written) {
+        return WrittenPages::None;
+    }
+    if (PbFlushStatsEnabled()) {
+        g_pbflush_stats.hits[words <= 8 ? 0 : words <= 64 ? 1 : 2].fetch_add(1, std::memory_order_relaxed);
+        if (words > PbFlushMaxWords()) {
+            g_pbflush_stats.skipped.fetch_add(1, std::memory_order_relaxed);
+            return WrittenPages::None;
+        }
+        if (!stale) {
+            g_pbflush_stats.fresh.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return stale ? WrittenPages::Stale : WrittenPages::Fresh;
+}
+
+bool DmaPusher::DeferGpuWrittenEntry(const CommandListHeader& header, std::span<const u32> snapshot) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    const size_t words = header.size;
+    if (!split.Active() || words > DeferredEntry::MaxWords || dma_state.method_count < words ||
+        dma_state.method < non_puller_methods) {
+        return false;
+    }
+    auto* const engine = subchannels[dma_state.subchannel];
+    if (engine == nullptr) {
+        return false;
+    }
+    const auto type = subchannel_type[dma_state.subchannel];
+    if (split.FrontMacros()) {
+        // Macros run on the front need the words there.
+        if (type == Engines::EngineTypes::Maxwell3D &&
+            static_cast<Engines::Maxwell3D*>(engine)->GetNativeMacroEngine().native_turing) {
+            return false;
+        }
+        if (type == Engines::EngineTypes::KeplerCompute &&
+            static_cast<Engines::KeplerCompute*>(engine)->FrontRunsMacros()) {
+            return false;
+        }
+    }
+    DeferredEntry entry{
+        .system = &system,
+        .memory = &memory_manager,
+        .engine = engine,
+        .address = header.addr,
+        .words = static_cast<u32>(words),
+        .method = dma_state.method,
+        .method_count = dma_state.method_count,
+        .non_incrementing = dma_state.non_incrementing,
+        .increment_once = dma_increment_once,
+        .wants_segment = WantsSegment(),
+        .payload_dirty = (type == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline &&
+                          dma_state.non_incrementing) ||
+                         (type == Engines::EngineTypes::Maxwell3D && dma_state.method >= MacroRegistersStart),
+        .data{},
+    };
+    if (snapshot.size() == words) {
+        std::ranges::copy(snapshot, entry.data.begin());
+    } else {
+        memory_manager.ReadBlockUnsafe(header.addr, entry.data.data(), words * sizeof(u32));
+    }
+    split.Defer([entry] { RunDeferredEntry(entry); });
+    g_pbflush_stats.deferred.fetch_add(1, std::memory_order_relaxed);
+    // What ProcessCommands does to the method state for these words.
+    if (dma_state.non_incrementing) {
+        dma_state.is_last_call = true;
+    } else {
+        for (size_t i = 0; i < words; ++i) {
+            dma_state.is_last_call = dma_state.method_count - i <= 1;
+            dma_state.method += !dma_state.non_incrementing ? 1 : 0;
+            dma_state.non_incrementing |= dma_increment_once;
+        }
+    }
+    dma_state.method_count -= static_cast<u32>(words);
+    return true;
+}
+
+bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t words) {
+    // With EDEN_NX2_PBFLUSH_EPOCH, whole pages, so later entries on them need no drain.
+    const bool epoch = PbFlushEpochEnabled();
+    const GPUVAddr begin = epoch ? address & ~GPUVAddr{0xfff} : address;
+    const GPUVAddr end = epoch ? (address + words * sizeof(u32) + 0xfff) & ~GPUVAddr{0xfff}
+                               : address + words * sizeof(u32);
+    const size_t size = end - begin;
+    bool flushed = false;
+    const auto flush = [memory = &memory_manager, begin, size, result = &flushed] {
+        if (memory->IsMemoryDirty(begin, size, VideoCommon::CacheType::BufferCache)) {
+            memory->FlushRegion(begin, size, VideoCommon::CacheType::BufferCache);
+            g_pbflush_stats.flushes.fetch_add(1, std::memory_order_relaxed);
+            *result = true;
+        }
+    };
+    if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+        // The caches belong to the split's back: flush there, after what the front queued (the
+        // work that writes these words among it), and wait for it.
+        split.Defer(flush);
+        split.Drain();
+        g_pbflush_stats.drains.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        flush();
+    }
+    if (epoch) {
+        for (GPUVAddr page = begin; page < end; page += 0x1000) {
+            if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+                const u64 device_page = *device >> Nx2WrittenPageBits;
+                FreshSlot(device_page) = {device_page, g_writer_epoch};
+            }
+        }
+    }
+    if (static std::atomic<u32> reported{}; flushed && reported.fetch_add(1) < 5) {
+        LOG_INFO(HW_GPU, "NX2 pbflush: flushed GPU-written command words {:#x}+{:#x} on ch {}",
+                 begin, size, channel_state.bind_id);
+    }
+    return true;
+}
+
+void DmaPusher::ReadGpuWrittenWords(GPUVAddr address, std::span<u32> words) const {
+    const GPUVAddr end = address + words.size_bytes();
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < end; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        if (!device || !Nx2IsGpuWritten(*device)) {
+            continue;
+        }
+        const GPUVAddr begin = (std::max)(page, address);
+        const GPUVAddr stop = (std::min)(page + 0x1000, end);
+        memory_manager.ReadBlockUnsafe(begin, words.data() + (begin - address) / sizeof(u32), stop - begin);
+    }
+}
+
 void DmaPusher::CallMethod(u32 argument) {
     if (g_semaphore_watch != 0) [[unlikely]] {
         WatchArgument(dma_state.method, argument);
@@ -376,6 +714,9 @@ void DmaPusher::CallMethod(u32 argument) {
         if (subchannel == nullptr) {
             ReportUnboundSubchannel();
             return;
+        }
+        if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
+            ++g_writer_epoch;
         }
         if (split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
@@ -426,6 +767,9 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         if (subchannel == nullptr) {
             ReportUnboundSubchannel();
             return;
+        }
+        if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
+            ++g_writer_epoch;
         }
         if (split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;

@@ -31,6 +31,7 @@
 #include "core/hle/service/server_manager.h"
 #include "frontend_common/firmware_manager.h"
 #include "video_core/gpu.h"
+#include "video_core/nx2.h"
 
 namespace Service::Nvidia {
 
@@ -126,6 +127,7 @@ void LoopProcess(Core::System& system) {
 
 Module::Module(Core::System& system)
     : container{system.Host1x()}, service_context{system, "nvdrv"}, events_interface{*this} {
+    Tegra::Nx2ClearGpuWrittenPages();
     nx2_stub_builder = [this, &system](DeviceFD fd, const std::string& name) {
         auto device = std::make_shared<Devices::nx2_stub_device>(system, name);
         open_files.emplace(fd, device);

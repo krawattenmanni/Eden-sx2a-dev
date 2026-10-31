@@ -181,6 +181,18 @@ private:
     void CallMethod(u32 argument);
     void CallMultiMethod(const u32* base_start, u32 num_methods);
     [[nodiscard]] bool WantsSegment() const;
+    /// Whether an entry (up to EDEN_NX2_PBFLUSH_MAX words) is on pages the GPU has written, and
+    /// whether they were flushed since the last work that may write them.
+    enum class WrittenPages { None, Fresh, Stale };
+    [[nodiscard]] WrittenPages CheckGpuWrittenPages(GPUVAddr address, size_t words) const;
+    /// A data-only entry for an engine method run on the split's back: flushed, re-read and
+    /// executed there instead of waiting for the back. Returns false when the front needs it.
+    bool DeferGpuWrittenEntry(const CommandListHeader& header, std::span<const u32> snapshot);
+    /// Brings command words on pages the GPU has written (maybe only in host buffers) to guest
+    /// memory, waiting for the split's back.
+    bool FlushGpuWrittenCommands(GPUVAddr address, size_t words);
+    /// Overwrites the words of `words` (an entry at `address`) on GPU-written pages with guest memory.
+    void ReadGpuWrittenWords(GPUVAddr address, std::span<u32> words) const;
     void ReportUnboundSubchannel();
     void WatchArgument(u32 method, u32 argument) const;
 
@@ -197,6 +209,7 @@ private:
 
 public:
     Common::ScratchBuffer<CommandHeader> command_headers; ///< Buffer for list of commands fetched at once
+    std::vector<u32> gpu_written_words; ///< EDEN_NX2_PB_COPY snapshot with GPU-written words read again
 
     std::queue<CommandList> dma_pushbuffer; ///< Queue of command lists to be processed
     std::size_t dma_pushbuffer_subindex{};  ///< Index within a command list within the pushbuffer

@@ -23,6 +23,7 @@
 #include "video_core/engines/puller.h"
 #include "video_core/gpu.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2.h"
 
 namespace Service::Nvidia::Devices {
 namespace {
@@ -179,6 +180,14 @@ NvResult nvhost_gpu::ZCullBind(IoctlZCullBind& params) {
 NvResult nvhost_gpu::SetErrorNotifier(IoctlSetErrorNotifier& params) {
     LOG_WARNING(Service_NVDRV, "(STUBBED) called, offset={:X}, size={:X}, mem={:X}", params.offset,
                 params.size, params.mem);
+    // Like the host driver, clear the notifier when it is installed: NVN polls its status word and
+    // treats a non-zero value (whatever the buffer held before) as a channel error.
+    if (const auto handle = nvmap.GetHandle(params.mem);
+        handle && handle->address && params.size && params.size <= 0x10000 &&
+        params.offset <= handle->size && params.size <= handle->size - params.offset) {
+        const std::vector<u8> zeros(params.size);
+        system.ApplicationMemory().WriteBlock(handle->address + params.offset, zeros.data(), zeros.size());
+    }
     return NvResult::Success;
 }
 
@@ -425,8 +434,8 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
                      entry.addr.Value(), entry.size.Value());
         }
         static const bool check = std::getenv("EDEN_NX2_PB_CHECK") != nullptr;
-        // EDEN_NX2_PB_COPY: execute the words as they were at submit time.
-        static const bool copy = std::getenv("EDEN_NX2_PB_COPY") != nullptr;
+        // EDEN_NX2_PB_COPY (on by default, =0 off): execute the words as they were at submit time.
+        static const bool copy = Tegra::Nx2EnvDefaultOn("EDEN_NX2_PB_COPY");
         if (check || copy) {
             std::vector<u32> words;
             for (const auto& entry : entries.command_lists) {
