@@ -37,7 +37,7 @@ Eden-NS2's own README follows below this section.
 ### Install
 
 - Get the APK from this repo's **Releases** page only, and check its SHA-256 against the one in the release notes.
-- It installs as `dev.eden.nx2` ("Eden NX2"), alongside the official Eden app, and keeps its own settings and saves.
+- It installs as `dev.eden.nx2` ("Eden NX2A"), alongside the official Eden app, and keeps its own settings and saves.
   v0.2.1 installs over earlier Eden NX2 versions and keeps your settings.
 - It needs an arm64 device on Android 13 or newer. **RAM:** 16 GB is recommended; 12 GB may work for lighter games.
   DK Bananza peaks at about 6 GB for the app.
@@ -70,7 +70,7 @@ than one thread. To try other values, put `KEY=VALUE` lines in `Android/data/dev
 ### Troubleshooting
 
 **The app closes on its own, with no error.** Usually Android's low-memory killer, not a crash.
-- Keep the game in front, close other apps first, and set battery usage for Eden NX2 to Unrestricted. Exclude it from
+- Keep the game in front, close other apps first, and set battery usage for Eden NX2A to Unrestricted. Exclude it from
   any "app freezer" or "smart memory" feature your phone has.
 - Phones with less than 16 GB of RAM will likely not cope.
 
@@ -89,14 +89,14 @@ Skip in-game videos where the game allows it: they play at the game's frame rate
 program files (`main`, `sdk`, `subsdk0` that fail to decompress) hang without an error. The log then shows
 `assert r == int(nso_header.segments[i].size)` near the start.
 
-**Closing the game.** Swiping Eden NX2 away from recent apps now ends the game and the app. Use that before starting a
+**Closing the game.** Swiping Eden NX2A away from recent apps now ends the game and the app. Use that before starting a
 different game if a launch misbehaves.
 
 ### Be careful about
 
 - **Legal:** only use games, keys and firmware dumped from hardware you own. None are included, and none will be provided.
 - **Signing key:** the APK is signed with the public test key shipped in Eden's source. Anyone can sign an APK with that
-  key, so another "Eden NX2" APK could install over this one. Only install builds from this repo, and check the checksum.
+  key, so another "Eden NX2A" APK could install over this one. Only install builds from this repo, and check the checksum.
 - **All files access:** lets the app read and write all of shared storage. It is only needed for loose dumps; you can
   revoke it afterwards.
 - **Memory:** the 10GB and 12GB layouts are unsafe. Android may kill the app, or other apps, under memory pressure.
