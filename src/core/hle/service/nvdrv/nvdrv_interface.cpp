@@ -5,9 +5,12 @@
 // SPDX-FileCopyrightText: 2021 Skyline Team and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
+
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/string_util.h"
+#include "core/arm/debug.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/kernel/k_process.h"
@@ -19,6 +22,25 @@
 #include "core/hle/service/nvdrv/devices/native_gpu_characteristics.h"
 
 namespace Service::Nvidia {
+
+namespace {
+// EDEN_NX2_NVDRV_TRACE=1: log opens, failed ioctls and closes with the caller's guest backtrace.
+bool NvdrvTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_NVDRV_TRACE");
+        return value != nullptr && value[0] != '0';
+    }();
+    return enabled;
+}
+
+// The caller is blocked in its IPC request, so its saved context is current.
+void LogCallerBacktrace(const Kernel::KThread& thread) {
+    for (const auto& entry : Core::GetBacktrace(&thread)) {
+        LOG_WARNING(Service_NVDRV, "  {} {:#x} +{:#x} {}", entry.module, entry.original_address,
+                    entry.offset, entry.name);
+    }
+}
+} // namespace
 
 void NVDRV::Open(HLERequestContext& ctx) {
     LOG_DEBUG(Service_NVDRV, "called");
@@ -45,6 +67,9 @@ void NVDRV::Open(HLERequestContext& ctx) {
     }
 
     DeviceFD fd = nvdrv->Open(device_name, session_id);
+    if (NvdrvTraceEnabled()) {
+        LOG_WARNING(Service_NVDRV, "trace: open {} -> fd={}", device_name, fd);
+    }
 
     rb.Push<DeviceFD>(fd);
     rb.PushEnum(fd != INVALID_NVDRV_FD ? NvResult::Success : NvResult::FileOperationFailed);
@@ -77,6 +102,10 @@ void NVDRV::Ioctl1(HLERequestContext& ctx) {
         LOG_DEBUG(Service_NVDRV, "native ioctl failure fd={}, ioctl={:#x}, result={}, caller={:#x}",
                   fd, command.raw, static_cast<u32>(nv_result), ctx.GetThread().GetContext().lr);
     }
+    if (NvdrvTraceEnabled()) {
+        LOG_WARNING(Service_NVDRV, "trace: ioctl fd={} {:#x} -> {}", fd, command.raw,
+                    static_cast<u32>(nv_result));
+    }
     if (command.is_out != 0) {
         ctx.WriteBuffer(output_buffer);
     }
@@ -107,6 +136,10 @@ void NVDRV::Ioctl2(HLERequestContext& ctx) {
     if (nv_result != NvResult::Success && ctx.GetThread().GetOwnerProcess()->UsesPAuthReturns()) {
         LOG_DEBUG(Service_NVDRV, "native ioctl failure fd={}, ioctl={:#x}, result={}, caller={:#x}",
                   fd, command.raw, static_cast<u32>(nv_result), ctx.GetThread().GetContext().lr);
+    }
+    if (NvdrvTraceEnabled()) {
+        LOG_WARNING(Service_NVDRV, "trace: ioctl fd={} {:#x} -> {}", fd, command.raw,
+                    static_cast<u32>(nv_result));
     }
     if (command.is_out != 0) {
         ctx.WriteBuffer(output_buffer);
@@ -149,6 +182,10 @@ void NVDRV::Ioctl3(HLERequestContext& ctx) {
         LOG_DEBUG(Service_NVDRV, "native ioctl failure fd={}, ioctl={:#x}, result={}, caller={:#x}",
                   fd, command.raw, static_cast<u32>(nv_result), ctx.GetThread().GetContext().lr);
     }
+    if (NvdrvTraceEnabled()) {
+        LOG_WARNING(Service_NVDRV, "trace: ioctl fd={} {:#x} -> {}", fd, command.raw,
+                    static_cast<u32>(nv_result));
+    }
     if (command.raw == 0xc0e04705 || command.raw == 0xc0e84705) {
         LOG_DEBUG(Service_NVDRV, "native characteristics input={}, output={}, inline={}, result={}",
                   input_buffer.size(), output_buffer.size(), inline_output_buffer.size(),
@@ -176,6 +213,10 @@ void NVDRV::Close(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto fd = rp.Pop<DeviceFD>();
     LOG_DEBUG(Service_NVDRV, "close fd={}, caller={:#x}", fd, ctx.GetThread().GetContext().lr);
+    if (NvdrvTraceEnabled()) {
+        LOG_WARNING(Service_NVDRV, "trace: close fd={}", fd);
+        LogCallerBacktrace(ctx.GetThread());
+    }
     const auto result = nvdrv->Close(fd);
 
     IPC::ResponseBuilder rb{ctx, 3};
