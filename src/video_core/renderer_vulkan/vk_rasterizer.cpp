@@ -383,6 +383,12 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         regs.rt[0].Address(), regs.rt[0].width, regs.rt[0].height);
         }
     };
+    // A topology past Patches would index the pipeline state's lookup tables out of bounds.
+    if (const auto topology = maxwell3d->draw_manager.draw_state.topology;
+        static_cast<u32>(topology) > static_cast<u32>(Maxwell::PrimitiveTopology::Patches)) {
+        report_failure("invalid topology");
+        return;
+    }
     // Donkey Kong Bananza's terrain: a vertex program drawn over points resets each rock and dirt
     // piece's 5-word indirect draw record ({0 triangles, 1 copy, 0, 0, 0}) through the pointers in
     // a list (c0[0x110]). The storage buffer tracking does not follow addresses loaded from memory,
