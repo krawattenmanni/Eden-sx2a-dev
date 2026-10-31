@@ -902,7 +902,7 @@ private:
                  present_height <= image_height && packet[8] == 3 &&
                  image->preference[4] == 7 &&
                  (image->preference[6] == 1 || image->preference[6] == 4) &&
-                 state.output_encoding == 0x14,
+                 (state.output_encoding == 0x14 || state.output_encoding == 0x5),
                  Kernel::ResultNotImplemented);
         const u32 fence_id = ~packet[22];
         R_UNLESS(packet[23] == 0 && packet[25] == 0 &&
@@ -994,8 +994,9 @@ private:
             result = Kernel::ResultNotFound;
             if (token && state != m_client_states.end()) {
                 result = Kernel::ResultNotImplemented;
-                // Only the SDK's observed default output encoding is supported.
-                if (encoding == 0x14) {
+                // Only the SDKs' observed default output encodings are supported: 0x14, and 0x5
+                // from the MKW 1.0.0 SDK. Presentation composites both the same way.
+                if (encoding == 0x14 || encoding == 0x5) {
                     state->output_encoding = encoding;
                     result = ResultSuccess;
                 }
