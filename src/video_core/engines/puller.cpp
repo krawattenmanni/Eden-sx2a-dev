@@ -91,10 +91,27 @@ void Puller::ProcessBindMethod(DmaPusher& dma_pusher, const MethodCall& method_c
         engine &= Gf100BindClassMask;
     }
 
-    // Binding changes engine state the split's back thread uses: let it catch up first.
-    DrainBack(VideoCommon::Nx2Profile::DrainSite::Bind);
-    if (dma_pusher.channel_state.native_abi) dma_pusher.memory_manager.EnableNativeTiling();
     const auto engine_id = static_cast<EngineID>(engine);
+    // Binding changes engine state the split's back thread uses: let it catch up first. A
+    // rebind of the class an engine is already set up for only changes the front's subchannel
+    // table (the copy, inline-to-memory, 2D and timer engines have no such state).
+    const bool sets_tiling =
+        dma_pusher.channel_state.native_abi && !dma_pusher.memory_manager.UsesNativeTiling();
+    const void* const macro_context = dma_pusher.channel_state.native_macro_context.get();
+    if (macro_context != bound_macro_context) {
+        bound_macro_context = macro_context;
+        bound_3d_class.reset();
+        bound_compute_class.reset();
+    }
+    const bool sets_3d = (engine_id == EngineID::AMPERE_B || engine_id == EngineID::MAXWELL_B) &&
+                         bound_3d_class != engine_id;
+    const bool sets_compute =
+        (engine_id == EngineID::AMPERE_COMPUTE_B || engine_id == EngineID::KEPLER_COMPUTE_B) &&
+        bound_compute_class != engine_id;
+    if (sets_tiling || sets_3d || sets_compute) {
+        DrainBack(VideoCommon::Nx2Profile::DrainSite::Bind);
+    }
+    if (sets_tiling) dma_pusher.memory_manager.EnableNativeTiling();
     if (dma_pusher.channel_state.native_abi && engine_id == EngineID::AMPERE_B) {
         Tegra::g_native_channels.store(true, std::memory_order_relaxed);
     }
@@ -105,17 +122,28 @@ void Puller::ProcessBindMethod(DmaPusher& dma_pusher, const MethodCall& method_c
         break;
     case EngineID::AMPERE_B:
         if (!dma_pusher.channel_state.native_abi) { UNIMPLEMENTED_MSG("Native GPU class on legacy channel"); return; }
-        dma_pusher.channel_state.payload->maxwell_3d.SetNativeTuringMacroMode(true);
+        if (sets_3d) {
+            bound_3d_class = engine_id;
+            dma_pusher.channel_state.payload->maxwell_3d.SetNativeTuringMacroMode(true);
+        }
         dma_pusher.BindSubchannel(&dma_pusher.channel_state.payload->maxwell_3d, method_call.subchannel, EngineTypes::Maxwell3D);
         break;
     case EngineID::MAXWELL_B:
-        dma_pusher.channel_state.payload->maxwell_3d.SetNativeTuringMacroMode(false);
+        if (sets_3d) {
+            bound_3d_class = engine_id;
+            dma_pusher.channel_state.payload->maxwell_3d.SetNativeTuringMacroMode(false);
+        }
         dma_pusher.BindSubchannel(&dma_pusher.channel_state.payload->maxwell_3d, method_call.subchannel, EngineTypes::Maxwell3D);
         break;
     case EngineID::AMPERE_COMPUTE_B:
         if (!dma_pusher.channel_state.native_abi) { UNIMPLEMENTED_MSG("Native GPU class on legacy channel"); return; }
         [[fallthrough]];
     case EngineID::KEPLER_COMPUTE_B:
+        if (!sets_compute) {
+            dma_pusher.BindSubchannel(&dma_pusher.channel_state.payload->kepler_compute, method_call.subchannel, EngineTypes::KeplerCompute);
+            break;
+        }
+        bound_compute_class = engine_id;
         if (engine_id == EngineID::AMPERE_COMPUTE_B && dma_pusher.channel_state.native_macro_context) {
             auto& context = *dma_pusher.channel_state.native_macro_context;
             dma_pusher.channel_state.payload->kepler_compute.SetNativeMacroMode(&context.engine, context.positions, &context);

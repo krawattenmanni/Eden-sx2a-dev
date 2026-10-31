@@ -140,6 +140,11 @@ private:
 
     /// Mapping of command subchannels to their bound engine ids
     std::array<EngineID, 8> bound_engines{};
+    /// The class this channel's 3D and compute engines were last set up for by a bind, and the
+    /// channel's native macro context then (BindToTsg can replace it).
+    std::optional<EngineID> bound_3d_class;
+    std::optional<EngineID> bound_compute_class;
+    const void* bound_macro_context{};
 
     enum class GpuSemaphoreOperation {
         AcquireEqual = 0x1,
