@@ -1060,20 +1060,50 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             restore_predicate();
             break;
         }
-        case 0x89c: { // Uniform predicate AND with an optionally inverted third source.
-            const u32 target = insn.Bits(81, 3);
-            const u32 lut = insn.Bits(64, 3) | (insn.Bits(72, 5) << 3);
-            if (target == 7 || insn.Bits(84, 3) != 7 ||
-                insn.Bits(16, 8) || insn.words[1] || (lut != 0x80 && lut != 0x40))
-                return fail(index, "native uniform predicate LUT mode");
+        case 0x89c: { // Uniform predicate LUT whose table is a constant or one AND of its sources.
+            const u32 target = insn.Bits(81, 3), second = insn.Bits(84, 3);
+            const std::array<u32, 3> sources{insn.Bits(87, 4), insn.Bits(77, 4), insn.Bits(68, 4)};
             const auto mapped = [](u32 source) { return ((source & 7) == 7 ? 7 : 6 - (source & 7)) | (source & 8); };
+            // Rows unreachable through UPT/!UPT sources are ignored. A table true on no row, every
+            // row, or exactly one row is a PSETP AND of three (possibly inverted) predicates.
+            const auto product = [&](u32 table) -> std::optional<std::array<u32, 3>> {
+                u32 reachable = 0, ones = 0, row_one = 0;
+                for (u32 row = 0; row < 8; ++row) {
+                    bool valid = true;
+                    for (u32 source = 0; source < 3; ++source)
+                        valid &= (sources[source] & 7) != 7 || ((row >> (2 - source)) & 1) != ((sources[source] >> 3) & 1);
+                    if (!valid) continue;
+                    ++reachable;
+                    if ((table >> row) & 1) { ++ones; row_one = row; }
+                }
+                if (ones == 0) return std::array<u32, 3>{15, 7, 7};
+                if (ones == reachable) return std::array<u32, 3>{7, 7, 7};
+                if (ones != 1) return std::nullopt;
+                std::array<u32, 3> terms;
+                for (u32 source = 0; source < 3; ++source)
+                    terms[source] = (sources[source] & 7) == 7 ? 7 : mapped(sources[source]) ^ (((row_one >> (2 - source)) & 1) ? 0U : 8U);
+                return terms;
+            };
+            const auto first_terms = product(insn.Bits(64, 3) | (insn.Bits(72, 5) << 3));
+            const auto second_terms = product(insn.Bits(16, 8));
+            // The second output is computed after the first, so it must not read the first's target.
+            const bool second_reads_target = second_terms && std::ranges::any_of(*second_terms, [&](u32 term) {
+                return (term & 7) == 6 - target;
+            });
+            if (target == 7 || second == target || insn.words[1] || !first_terms ||
+                (second != 7 && (!second_terms || second_reads_target)))
+                return fail(index, "native uniform predicate LUT mode");
             emit(0x38e8000000070000ULL | 253 | (u64{255} << 8) | (u64{0x7f} << 20));
             emit(0x38f0000000070000ULL | (u64{239} << 8) | (u64{0x7f} << 20));
             // A UPn guard predicates the PSETP: when it is false the target keeps its loaded value.
-            emit(0x5090000000000000ULL | (u64{mapped(native_predicate)} << 16) | (u64{6 - target} << 3) | 7 |
-                 (u64{mapped(insn.Bits(87, 4))} << 12) | (u64{mapped(insn.Bits(77, 4))} << 29) |
-                 (u64{mapped(insn.Bits(68, 4)) ^ (lut == 0x40 ? 8U : 0U)} << 39));
-            emit(0x38e8000000070000ULL | 239 | (u64{239} << 8) | (u64{1} << (26 - target)));
+            const auto set = [&](u32 output, const std::array<u32, 3>& terms) {
+                emit(0x5090000000000000ULL | (u64{mapped(native_predicate)} << 16) | (u64{6 - output} << 3) | 7 |
+                     (u64{terms[0]} << 12) | (u64{terms[1]} << 29) | (u64{terms[2]} << 39));
+            };
+            set(target, *first_terms);
+            if (second != 7) set(second, *second_terms);
+            const u32 mask = (1U << (6 - target)) | (second != 7 ? 1U << (6 - second) : 0U);
+            emit(0x38e8000000070000ULL | 239 | (u64{239} << 8) | (u64{mask} << 20));
             emit(0x38f0000000070000ULL | (u64{253} << 8) | (u64{0x7f} << 20));
             break;
         }

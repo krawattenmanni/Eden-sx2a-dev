@@ -4649,6 +4649,34 @@ TEST_CASE("Native uniform predicate LUT and ordinary copies keep separate banks"
 }
 
 
+TEST_CASE("Native uniform predicate LUTs reduce constant inputs and outputs", "[native-shader]") {
+    // @!UP1 UPLOP3.LUT UP0, PT, UP6, UPT, UP5, 0x4: UP0 = !UP6 && !UP5.
+    // The second form negates the middle input (UP0 = false) and sets UP3 through a 0xff table.
+    for (bool constant : {false, true}) {
+        const std::array<Native, 2> input{{{{constant ? 0x00ff989cU : 0x0000989cU, 0,
+            constant ? 0x0331e054U : 0x0370e054U, 0}}, VertexTransform.back()}};
+        Shader::ObjectPool<IR::Inst> pool;
+        IR::Block block{pool};
+        TranslateScalarNative(input, block);
+        for (u32 bank = 0; bank < 128; ++bank) {
+            ScalarNativeMachine machine;
+            machine.regs[239] = bank;
+            for (u32 p = 0; p < 7; ++p) machine.predicates[p] = (p & 1) != 0;
+            const auto original = machine.predicates;
+            machine.Execute(block);
+            u32 expected = bank;
+            if (!(bank & (1U << 5))) {
+                const bool up0 = !constant && !(bank & 1) && !(bank & 2);
+                expected = (expected & ~(1U << 6)) | (up0 ? 1U << 6 : 0U);
+                if (constant) expected |= 1U << 3;
+            }
+            REQUIRE(machine.regs[239] == expected);
+            REQUIRE(machine.predicates == original);
+        }
+    }
+}
+
+
 TEST_CASE("Native predicated uniform address arithmetic uses the selected uniform predicate", "[native-shader]") {
     const std::array<Native, 2> unsupported{{{{0x0405f891, 1, 0x0f8e103f, 0}}, VertexTransform.back()}};
     REQUIRE_FALSE(Shader::Ampere::LowerToMaxwell(unsupported));
