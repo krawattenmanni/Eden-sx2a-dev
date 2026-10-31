@@ -174,7 +174,7 @@ public:
         // occlusion queries (DK Bananza crashed in vkCmdBeginQuery on Adreno). Sample counts then
         // read as 0.
         static const bool no_occlusion = Tegra::Nx2EnvDefaultOn("EDEN_NX2_NO_OCCLUSION");
-        if (no_occlusion && Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        if (no_occlusion && Tegra::Nx2Program()) {
             return;
         }
 

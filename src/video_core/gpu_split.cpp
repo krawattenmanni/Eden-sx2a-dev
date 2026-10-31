@@ -88,8 +88,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         return value != nullptr ? value[0] : '2';
     }();
     const bool wanted = mode == '1' || mode == '2';
-    if (!wanted || !(Tegra::g_nx2_ampere.load(std::memory_order_relaxed) ||
-                     Tegra::g_native_channels.load(std::memory_order_relaxed))) {
+    if (!wanted || !Tegra::Nx2Program()) {
         return;
     }
     // EDEN_NATIVE_STRICT stalls a channel on failed native work, which only the thread that

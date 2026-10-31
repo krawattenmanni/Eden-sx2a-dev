@@ -63,7 +63,7 @@ size_t PbFlushMaxWords() {
 // drain. Assumes the words are written by compute or copies, not by 3D draws.
 bool PbFlushEpochEnabled() {
     static const bool enabled = Nx2EnvDefaultOn("EDEN_NX2_PBFLUSH_EPOCH");
-    return enabled && g_nx2_ampere.load(std::memory_order_relaxed);
+    return enabled && Nx2Program();
 }
 // Front thread only. Bumped when work that may write GPU memory is sent.
 u64 g_writer_epoch = 1;
@@ -427,7 +427,7 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // Mario Kart World runs small command lists its culling dispatches fill in each frame. Safe
     // reads flush every command list; unsafe ones only flush those on pages the GPU has written,
     // or their draws run with an older frame's words. Only those pages wait for the split's back.
-    if (!g_nx2_ampere.load(std::memory_order_relaxed) || size == 0) {
+    if (!Nx2Program() || size == 0) {
         return false;
     }
     const bool stats = PbFlushStatsEnabled();

@@ -19,7 +19,7 @@ namespace Tegra {
 inline std::atomic<bool> g_nx2_ampere{false};
 
 /// Parses a switch that is on unless NAME=0. Callers cache the result and also check
-/// g_nx2_ampere, so Switch 1 programs never see it on.
+/// Nx2Program(), so Switch 1 programs never see it on.
 [[nodiscard]] inline bool Nx2EnvDefaultOn(const char* name) {
     const char* value = std::getenv(name);
     return value == nullptr || value[0] != '0';
@@ -28,6 +28,12 @@ inline std::atomic<bool> g_nx2_ampere{false};
 // Set once a channel with the native (Switch 2) ABI binds its 3D engine: the GPU thread split
 // (gpu_split.h) starts for those titles.
 inline std::atomic<bool> g_native_channels{false};
+
+// NS2 marks Switch 2 programs with g_native_channels and never sets g_nx2_ampere.
+[[nodiscard]] inline bool Nx2Program() {
+    return g_nx2_ampere.load(std::memory_order_relaxed) ||
+           g_native_channels.load(std::memory_order_relaxed);
+}
 
 // Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Mario
 // Kart World runs small command lists its culling dispatches fill in each frame; read without a
