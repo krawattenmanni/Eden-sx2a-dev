@@ -125,7 +125,10 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 // submitted this list, which may read them: apply them first. Pokemon Pokopia
                 // keeps constants in pages its native storage bindings mark GPU-written, and some
                 // frames drew stale ones (flickering shadows, stretched geometry).
-                system.GPU().InvalidateGPUCache();
+                {
+                    Profile::Scope cpu_writes_scope{Profile::Zone::CpuWrites};
+                    system.GPU().InvalidateGPUCache();
+                }
                 scheduler.Push(system.GPU(), submit_list->channel, std::move(submit_list->entries));
             } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
                 Profile::Scope scope{Profile::Zone::Tick};

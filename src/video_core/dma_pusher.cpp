@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "common/logging.h"
@@ -116,6 +117,7 @@ void DmaPusher::DispatchCalls() {
         split.Publish();
         return;
     }
+    VideoCommon::Nx2Profile::Scope list_end_scope{VideoCommon::Nx2Profile::Zone::ListEnd};
     system.GPU().FlushCommands();
     system.GPU().OnCommandListEnd();
 }
@@ -194,6 +196,8 @@ bool DmaPusher::Step() {
 
     if (header.size > 0) {
         bool gpu_words = false;
+        std::optional<VideoCommon::Nx2Profile::Scope> entry_scope;
+        entry_scope.emplace(VideoCommon::Nx2Profile::Zone::EntryCheck);
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -240,15 +244,18 @@ bool DmaPusher::Step() {
                 ReadGpuWrittenWords(dma_state.dma_get, gpu_written_words);
                 words = gpu_written_words;
             }
+            entry_scope.reset();
             const std::span<const CommandHeader> commands{
                 reinterpret_cast<const CommandHeader*>(words.data()), words.size()};
             command_resume_offset += ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else if (use_safe) {
+            entry_scope.reset();
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
             command_resume_offset += ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else {
             FlushGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
+            entry_scope.reset();
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::UnsafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
             command_resume_offset += ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
