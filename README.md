@@ -58,6 +58,14 @@ supported for Switch 2 titles.
 4. If the app finds several (for example base and an update), pick one from the list. The newest update is listed first.
 5. Loading sits on a black screen for a while. That alone is not a hang.
 
+**In the games list:** add the folder that holds your dumps (for example `Switch2/`) as a game folder in Settings, and
+grant All files access. Each loose game then shows up in the list once, with its newest update (else the base game).
+Turn on deep scan for that folder if your updates sit under `updates/<version>/` more than three folders down.
+
+**Readiness check:** Settings → **Switch 2 readiness check** lists what is missing on your phone (RAM, Android version,
+GPU driver, recommended settings, All files access, games found, free storage, battery setting), with a button to fix
+each one where the app has a screen for it.
+
 Default settings: CPU backend **Dynarmic**, GPU mode **Fast**, async presentation **off**, resolution **1x**,
 asynchronous shaders **on**. Switch 2 games switch to the memory layout **12GB (Switch 2, Unsafe)** on their own.
 Keys and firmware are not needed for loose Switch 2 titles.
@@ -115,7 +123,8 @@ different game if a launch misbehaves.
 
 ### What this fork adds on top of Eden-NS2
 
-- **Android app:** 10 GB and 12 GB memory layouts, launching loose ExeFS dumps by real path, loose DLC
+- **Android app:** 10 GB and 12 GB memory layouts, launching loose ExeFS dumps by real path and listing them from game
+  folders, a Switch 2 readiness check, loose DLC
   (`dlc/<title id>/<version>/romfs`), Switch 2 defaults, the bundled Turnip
   driver, and ending the game when the app is swiped away.
 - **arm64 macro JIT:** the GPU's macro programs had only an x86-64 JIT; an arm64 backend (oaknut) runs them about 5x
