@@ -345,12 +345,7 @@ struct Values {
 
     // Graphics Settings
     ResolutionScalingInfo resolution_info{};
-    SwitchableSetting<ResolutionSetup> resolution_setup{linkage,
-#ifdef __ANDROID__
-                                                        ResolutionSetup::Res1_2X,
-#else
-                                                        ResolutionSetup::Res1X,
-#endif
+    SwitchableSetting<ResolutionSetup> resolution_setup{linkage, ResolutionSetup::Res1X,
                                                         "resolution_setup", Category::Renderer};
 
     SwitchableSetting<VSyncMode, true> vsync_mode{linkage,
