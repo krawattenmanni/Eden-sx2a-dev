@@ -44,6 +44,17 @@ bool DiagGpuSemaphoreEnabled() {
     return enabled;
 }
 
+// EDEN_NX2_ACQUIRE_NO_WAIT=1 (test): a native acquire not yet met fences and submits the recorded
+// work and suspends the channel, instead of waiting for the host GPU to finish all of it first.
+// The release then lands from the fence thread and the channel resumes from ResumePending.
+bool AcquireNoWait() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_ACQUIRE_NO_WAIT");
+        return value != nullptr && *value == '1';
+    }();
+    return enabled;
+}
+
 u32 ReadNativeSemaphoreWord(DmaPusher& dma_pusher, GPUVAddr address) {
     const auto cpu_address = dma_pusher.memory_manager.GpuToCpuAddress(address);
     if (cpu_address && dma_pusher.rasterizer->MustFlushRegion(*cpu_address, sizeof(u32), VideoCommon::CacheType::BufferCache)) {
@@ -259,7 +270,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                     }
                 }
                 if (!ready()) {
-                    {
+                    if (AcquireNoWait()) {
+                        dma_pusher.rasterizer->SignalReference();
+                        dma_pusher.rasterizer->FlushCommands();
+                    } else {
                         VideoCommon::Nx2Profile::Scope wait_scope{
                             VideoCommon::Nx2Profile::Zone::AcquireFenceWait};
                         dma_pusher.rasterizer->ReleaseFences(true);
