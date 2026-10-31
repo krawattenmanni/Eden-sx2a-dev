@@ -24,6 +24,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Tegra {
@@ -273,7 +274,7 @@ bool DmaPusher::Step() {
     }
 
     if (signal_sync) {
-        VideoCommon::GpuSplit::Get().Drain();
+        VideoCommon::GpuSplit::Get().Drain(VideoCommon::Nx2Profile::DrainSite::SyncMemory);
         rasterizer->SignalFence([this]() {
             std::scoped_lock lk(sync_mutex);
             synced = true;
@@ -515,7 +516,7 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu
     const size_t flush_size = flush_end - flush_begin;
     // The caches belong to the split's back: it first runs what the front queued (the dispatch
     // that writes these words among it).
-    VideoCommon::GpuSplit::Get().Drain();
+    VideoCommon::GpuSplit::Get().Drain(VideoCommon::Nx2Profile::DrainSite::PbFlush);
     if (stats) {
         g_pbflush_stats.drains.fetch_add(1, std::memory_order_relaxed);
     }

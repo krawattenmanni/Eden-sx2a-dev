@@ -83,10 +83,31 @@ inline u64 Now() {
     return static_cast<u64>(Common::g_wall_clock.GetTimeNS().count());
 }
 
+/// Why the split GPU thread's front waits for its back (GpuSplit::Drain, gpu_split.h).
+enum class DrainSite : u32 {
+    DmaRead,     ///< A front macro's MME DMA read (Maxwell3D::FrontDmaRead)
+    Acquire,     ///< Puller semaphore acquire (SemaphoreOperation)
+    LegacyAcquire, ///< Puller SemaphoreAcquire method
+    Resume,      ///< A suspended channel checks its acquire again
+    Bind,        ///< Puller BindObject
+    PbFlush,     ///< GPFIFO entry on a GPU-written page (DmaPusher::FlushGpuWrittenCommands)
+    SyncMemory,  ///< Command list entry with sync_memory_operations
+    RingFull,    ///< No room in the ring
+    Other,       ///< Taking the macros over, verify, stop
+    Count,
+};
+
+inline constexpr std::array<const char*, static_cast<size_t>(DrainSite::Count)> drain_site_names{
+    "dma-read", "acquire", "legacy-acquire", "resume", "bind", "pbflush", "sync", "ring-full",
+    "other",
+};
+
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
     std::array<u64, 8> counters{}; ///< See Counter
+    std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{}; ///< Drains that waited
+    std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
     u64 window_start{};
 };
@@ -151,6 +172,13 @@ inline void Add(Counter counter, u64 amount) {
     }
 }
 
+/// A drain of the split GPU thread that waited `ns` (front thread).
+inline void AddDrain(DrainSite site, u64 ns) {
+    auto& data = t_data;
+    ++data.drain_count[static_cast<size_t>(site)];
+    data.drain_ns[static_cast<size_t>(site)] += ns;
+}
+
 /// Called by the GPU thread (and the split's back thread) between commands: logs and resets
 /// the totals every 10 s.
 inline void Report(const char* thread_name = "GPU thread") {
@@ -196,6 +224,18 @@ inline void Report(const char* thread_name = "GPU thread") {
     line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
+    std::string drains;
+    for (size_t i = 0; i < data.drain_count.size(); ++i) {
+        if (data.drain_count[i] != 0) {
+            drains += fmt::format("{} {} {:.0f} ({:.1f} ms)", drains.empty() ? "" : ",",
+                                  drain_site_names[i],
+                                  static_cast<double>(data.drain_count[i]) * 1e9 / window,
+                                  static_cast<double>(data.drain_ns[i]) * 1000.0 / window);
+        }
+    }
+    if (!drains.empty()) {
+        line += " | drains:" + drains;
+    }
     LOG_INFO(HW_GPU, "{} per second:{}", thread_name, line);
     data = {};
     data.window_start = now;

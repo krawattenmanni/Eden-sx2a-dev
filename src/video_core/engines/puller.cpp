@@ -78,8 +78,8 @@ void OnBack(const Func& func) {
     }
 }
 
-void DrainBack() {
-    VideoCommon::GpuSplit::Get().Drain();
+void DrainBack(VideoCommon::Nx2Profile::DrainSite site) {
+    VideoCommon::GpuSplit::Get().Drain(site);
 }
 
 } // Anonymous namespace
@@ -92,7 +92,7 @@ void Puller::ProcessBindMethod(DmaPusher& dma_pusher, const MethodCall& method_c
     }
 
     // Binding changes engine state the split's back thread uses: let it catch up first.
-    DrainBack();
+    DrainBack(VideoCommon::Nx2Profile::DrainSite::Bind);
     if (dma_pusher.channel_state.native_abi) dma_pusher.memory_manager.EnableNativeTiling();
     const auto engine_id = static_cast<EngineID>(engine);
     if (dma_pusher.channel_state.native_abi && engine_id == EngineID::AMPERE_B) {
@@ -183,7 +183,7 @@ bool Puller::CanResumeNativeAcquire(DmaPusher& dma_pusher) const {
     }
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadNativeSemaphoreWord asks are its state).
-    DrainBack();
+    DrainBack(VideoCommon::Nx2Profile::DrainSite::Resume);
     if (dma_pusher.memory_manager.IsShuttingDown()) {
         return false;
     }
@@ -242,7 +242,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 regs.semaphore_sequence) {
             return;
         }
-        DrainBack();
+        DrainBack(VideoCommon::Nx2Profile::DrainSite::Acquire);
         do {
             u32 word = dma_pusher.memory_manager.Read<u32>(regs.semaphore_address.SemaphoreAddress());
             if (dma_pusher.channel_state.native_abi) {
@@ -343,7 +343,7 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
 }
 
 void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {
-    DrainBack();
+    DrainBack(VideoCommon::Nx2Profile::DrainSite::LegacyAcquire);
     u32 word = dma_pusher.memory_manager.Read<u32>(regs.semaphore_address.SemaphoreAddress());
     const auto value = regs.semaphore_acquire;
     while (word != value) {

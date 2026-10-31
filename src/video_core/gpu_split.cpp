@@ -111,7 +111,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     const bool allowed = !safe_reads && !Settings::IsGPULevelHigh() &&
                          Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
     if (active && !allowed) {
-        Drain();
+        Drain(Nx2Profile::DrainSite::Other);
         Stop();
         LOG_INFO(HW_GPU, "GPU thread split: stopped, the accuracy settings need the caches on the front");
         return;
@@ -183,9 +183,13 @@ void GpuSplit::WaitForSpace(size_t words) {
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Now() : 0;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (write_position + words - consumed_cache <= RingWords) {
+            if (start != 0) {
+                Nx2Profile::AddDrain(Nx2Profile::DrainSite::RingFull, Nx2Profile::Now() - start);
+            }
             return;
         }
         if (spins < 4096) {
@@ -224,22 +228,26 @@ void GpuSplit::AwaitReleases(GPUVAddr address, u64 size) {
         ++it;
     }
     if (wait) {
-        Drain();
+        Drain(Nx2Profile::DrainSite::DmaRead);
         sent_releases.clear();
     }
 }
 
-void GpuSplit::Drain() {
+void GpuSplit::Drain(Nx2Profile::DrainSite site) {
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache == write_position) {
         return;
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Now() : 0;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache == write_position) {
             publish_every = 8;
+            if (start != 0) {
+                Nx2Profile::AddDrain(site, Nx2Profile::Now() - start);
+            }
             return;
         }
         if (spins < 16384) {

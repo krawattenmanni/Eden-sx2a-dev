@@ -23,6 +23,10 @@ class EngineInterface;
 
 namespace VideoCommon {
 
+namespace Nx2Profile {
+enum class DrainSite : u32;
+}
+
 // Splits the GPU thread in two (NX2_GPU_THREAD_SPLIT.md). The GPU thread (the front) takes the
 // CPU's commands, parses command lists and runs the puller; engine method calls and everything
 // behind them (register state, macros, draws, the rasterizer and its caches) run in order on a
@@ -134,8 +138,8 @@ public:
 
     /// Makes what was sent visible to the back.
     void Publish();
-    /// Waits until the back executed everything sent so far.
-    void Drain();
+    /// Waits until the back executed everything sent so far. `site`: why (GPU profile).
+    void Drain(Nx2Profile::DrainSite site);
 
 private:
     enum class Kind : u64 {
