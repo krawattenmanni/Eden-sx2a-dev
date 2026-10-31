@@ -239,7 +239,9 @@ Result KPageTableBase::InitializeForProcess(Svc::CreateProcessFlag as_type, bool
     size_t kernel_map_region_size;
     if (m_address_space_width == 39) {
         alias_region_size = GetSpaceSize(KAddressSpaceInfo::Type::Alias);
-        heap_region_size = GetSpaceSize(KAddressSpaceInfo::Type::Heap);
+        heap_region_size = m_heap_region_size_override != 0
+                               ? m_heap_region_size_override
+                               : GetSpaceSize(KAddressSpaceInfo::Type::Heap);
         stack_region_size = GetSpaceSize(KAddressSpaceInfo::Type::Stack);
         kernel_map_region_size = GetSpaceSize(KAddressSpaceInfo::Type::MapSmall);
         m_code_region_start = m_address_space_start + aslr_space_start +
@@ -2102,7 +2104,8 @@ Result KPageTableBase::SetMemoryAttribute(KProcessAddress addr, size_t size, KMe
     constexpr KMemoryAttribute AttributeTestMask =
         ~(KMemoryAttribute::SetMask | KMemoryAttribute::DeviceShared);
     const KMemoryState state_test_mask =
-        (True(mask & KMemoryAttribute::Uncached) ? KMemoryState::FlagCanChangeAttribute
+        (True(mask & (KMemoryAttribute::Uncached | KMemoryAttribute::GpuAccessible))
+             ? KMemoryState::FlagCanChangeAttribute
                                                  : KMemoryState::None) |
         (True(mask & KMemoryAttribute::PermissionLocked) ? KMemoryState::FlagCanPermissionLock
                                                          : KMemoryState::None);

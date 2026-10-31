@@ -651,6 +651,20 @@ public:
         virtual_base = nullptr;
     }
 
+    /// Zeroes whole backing pages by releasing them, so clearing a large allocation doesn't
+    /// commit host memory the guest never touches. Returns false if the caller must memset.
+    bool DiscardBacking(size_t offset, size_t length) {
+#if defined(__linux__)
+        if (fd >= 0) {
+            return fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, off_t(offset),
+                             off_t(length)) == 0;
+        }
+        return madvise(backing_base + offset, length, MADV_DONTNEED) == 0;
+#else
+        return false;
+#endif
+    }
+
     const size_t backing_size; ///< Size of the backing memory in bytes
     const size_t virtual_size; ///< Size of the virtual address placeholder in bytes
 
@@ -791,6 +805,17 @@ void HostMemory::Protect(size_t virtual_offset, size_t length, MemoryPermission 
 }
 
 void HostMemory::ClearBackingRegion(size_t physical_offset, size_t length, u32 fill_value) {
+#if !(defined(_WIN32) || defined(__OPENORBIS__) || defined(__managarm__))
+    if (fill_value == 0 && impl) {
+        const size_t begin = Common::AlignUp(physical_offset, PageAlignment);
+        const size_t end = Common::AlignDown(physical_offset + length, PageAlignment);
+        if (begin < end && impl->DiscardBacking(begin, end - begin)) {
+            std::memset(backing_base + physical_offset, 0, begin - physical_offset);
+            std::memset(backing_base + end, 0, physical_offset + length - end);
+            return;
+        }
+    }
+#endif
     std::memset(backing_base + physical_offset, fill_value, length);
 }
 

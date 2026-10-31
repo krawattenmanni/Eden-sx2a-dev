@@ -1255,11 +1255,25 @@ Result KProcess::LoadFromMetadata(KernelCore& kernel, const FileSys::ProgramMeta
     static_assert(sizeof(params.name) <= sizeof(name));
     std::memcpy(params.name.data(), name.data(), sizeof(params.name));
 
+    // Switch 2 applications may size their heap past the 8 GiB 39-bit heap region.
+    if (metadata.IsSwitch2()) {
+        m_page_table.SetHeapRegionSizeOverride(Switch2HeapRegionSize);
+    }
+
     // Initialize for application process.
     R_TRY(this->Initialize(kernel, params, metadata.GetKernelCapabilities(), res_limit, pool, aslr_space_start));
 
     // Assign remaining properties.
     m_ideal_core_id = metadata.GetMainThreadCore();
+
+    // Switch 2 applications get more memory than a 64-bit heap region holds (nninitStartup sizes
+    // its heap as total memory minus ~6.3 GiB), so count the alias region as well, bounded by the
+    // pool through the resource limit.
+    if (metadata.IsSwitch2()) {
+        m_is_switch2 = true;
+        m_max_process_memory = m_page_table.GetHeapRegionSize() + m_page_table.GetAliasRegionSize();
+        R_TRY(m_page_table.SetMaxHeapSize(m_page_table.GetHeapRegionSize()));
+    }
 
     // Set up emulation context.
     this->InitializeInterfaces(kernel);

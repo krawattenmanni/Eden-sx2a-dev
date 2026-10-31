@@ -119,6 +119,10 @@ public:
                                            : nullptr;
     }
 
+    [[nodiscard]] const Shader::Info& StageInfo(size_t stage) const noexcept {
+        return stage_infos[stage];
+    }
+
     [[nodiscard]] bool IsBuilt() const noexcept {
         return is_built.load(std::memory_order::relaxed);
     }

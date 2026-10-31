@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -13,6 +15,7 @@
 
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 
+#include "common/logging.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -55,6 +58,9 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
 Scheduler::~Scheduler() = default;
 
 u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
+    if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+        VideoCommon::GpuSplit::CheckOwner("Scheduler::Flush");
+    }
     // When flushing, we only send data to the worker thread; no waiting is necessary.
     const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);
     AllocateNewContext();
@@ -62,6 +68,9 @@ u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
 }
 
 void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
+    if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+        VideoCommon::GpuSplit::CheckOwner("Scheduler::Finish");
+    }
     // When finishing, we need to wait for the submission to have executed on the device.
     const u64 presubmit_tick = CurrentTick();
     SubmitExecution(signal_semaphore, wait_semaphore);
@@ -83,12 +92,21 @@ void Scheduler::WaitWorker() {
 }
 
 void Scheduler::DispatchWork() {
+    if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+        VideoCommon::GpuSplit::CheckOwner("Scheduler::DispatchWork");
+    }
     if (chunk && !chunk->Empty()) {
+        // Waking the worker is a system call (~2% of the GPU thread at one dispatch per 8
+        // draws): skip it while the worker is still busy, it pops the queue before waiting.
+        bool wake;
         {
             std::scoped_lock ql{queue_mutex};
             work_queue.push(std::move(chunk));
+            wake = worker_waiting;
         }
-        event_cv.notify_all();
+        if (wake) {
+            event_cv.notify_all();
+        }
         AcquireNewChunk();
     }
 }
@@ -290,7 +308,11 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
             std::unique_lock lk{queue_mutex};
 
             // Wait for work.
-            event_cv.wait(lk, stop_token, [&] { return TryPopQueue(work); });
+            event_cv.wait(lk, stop_token, [&] {
+                worker_waiting = !TryPopQueue(work);
+                return !worker_waiting;
+            });
+            worker_waiting = false;
 
             // If we've been asked to stop, we're done.
             if (stop_token.stop_requested()) {
@@ -381,6 +403,24 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     });
     chunk->MarkSubmit();
     DispatchWork();
+    if (static const bool trace = std::getenv("EDEN_NX2_TICK_TRACE") != nullptr; trace) {
+        static auto next = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now(); now >= next) {
+            next = now + std::chrono::seconds{2};
+            size_t queued, reserved;
+            {
+                std::scoped_lock ql{queue_mutex};
+                queued = work_queue.size();
+            }
+            {
+                std::scoped_lock rl{reserve_mutex};
+                reserved = chunk_reserve.size();
+            }
+            LOG_INFO(Render_Vulkan, "Tick trace: current {} gpu {} queued chunks {} reserve {}",
+                     master_semaphore->CurrentTick(), master_semaphore->KnownGpuTick(), queued,
+                     reserved);
+        }
+    }
     return signal_value;
 }
 

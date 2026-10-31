@@ -210,6 +210,7 @@ private:
     size_t m_mapped_insecure_memory{};
     size_t m_mapped_ipc_server_memory{};
     size_t m_alias_region_extra_size{};
+    size_t m_heap_region_size_override{};
     mutable KLightLock m_general_lock;
     mutable KLightLock m_map_physical_memory_lock;
     KLightLock m_device_map_lock;
@@ -256,6 +257,12 @@ public:
 
     void AllowDeviceMappingOfExecPages() {
         m_allowed_exec_device_mapping = true;
+    }
+
+    // Switch 2 programs can size their heap past the 8 GiB 39-bit heap region (DK Bananza asks
+    // for ~9.5 GiB), so they get a larger one. Must be set before InitializeForProcess.
+    void SetHeapRegionSizeOverride(size_t size) {
+        m_heap_region_size_override = size;
     }
 
     bool Contains(KProcessAddress addr) const {

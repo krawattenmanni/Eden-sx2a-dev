@@ -84,21 +84,31 @@ add_library(video_core STATIC
     host1x/nvdec.cpp
     host1x/nvdec.h
     host1x/nvdec_common.h
+    host1x/nx2_video_decoder.cpp
+    host1x/nx2_video_decoder.h
     host1x/syncpoint_manager.cpp
     host1x/syncpoint_manager.h
     host1x/vic.cpp
     host1x/vic.h
     macro.cpp
     macro.h
+    macro_memo.h
+    macro_turing.h
     fence_manager.h
     gpu.cpp
     gpu.h
+    gpu_split.cpp
+    gpu_split.h
     gpu_thread.cpp
     gpu_thread.h
     guest_memory.h
     invalidation_accumulator.h
     memory_manager.cpp
     memory_manager.h
+    native_qmd.h
+    native_query_trace.h
+    nx2.h
+    nx2_profile.h
     present.h
     pte_kind.h
     query_cache/bank_base.h
@@ -472,6 +482,10 @@ endif()
 
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak::xbyak)
+endif()
+
+if (ARCHITECTURE_arm64)
+    target_link_libraries(video_core PRIVATE merry::oaknut)
 endif()
 
 if (ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64)

@@ -458,6 +458,13 @@
     <string name="error_keys_invalid_filename">Verify your keys file has a .keys extension and try again.</string>
     <string name="error_keys_failed_init">Keys failed to initialize. Check that your dumping tools are up to date and re-dump keys.</string>
 
+    <!-- Loose ExeFS (Switch 2) launch strings -->
+    <string name="launch_exefs_folder">Launch ExeFS game folder</string>
+    <string name="exefs_folder_no_main">No exefs/main found in the selected folder or its subfolders</string>
+    <string name="exefs_folder_choose">Choose which ExeFS to launch</string>
+    <string name="exefs_folder_bad_path">Could not resolve the selected folder to a storage path</string>
+    <string name="exefs_folder_needs_permission">Grant all files access, then select the folder again</string>
+
     <!-- Applet launcher strings -->
     <string name="qlaunch_applet">Qlaunch</string>
     <string name="qlaunch_description">Launch applications from the system home screen</string>
@@ -1049,6 +1056,8 @@
     <string name="memory_4gb">4GB (Recommended)</string>
     <string name="memory_6gb">6GB (Unsafe)</string>
     <string name="memory_8gb">8GB (Unsafe)</string>
+    <string name="memory_10gb">10GB (Unsafe)</string>
+    <string name="memory_12gb">12GB (Switch 2, Unsafe)</string>
 
     <!-- CPU clock levels -->
     <string name="clock_normal">Normal</string>
