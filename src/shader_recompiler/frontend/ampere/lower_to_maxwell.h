@@ -2125,12 +2125,21 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             const u32 a = insn.Bits(24, 8), b = insn.Bits(32, 8);
             if ((insn.words[1] & ~0xffU) == 0x38000000) {
                 const bool offset = insn.Bits(76, 1);
-                if ((insn.words[2] & ~(0x04000000U | 0x1000U)) != 0x001e01ff ||
-                    (a & 1) || a > 248 || b > (offset ? 252U : 253U) || dest > 247)
+                const u32 mask = insn.Bits(72, 4), second = insn.Bits(64, 8), count = std::popcount(mask);
+                if ((insn.words[2] & ~(0x04000000U | 0x1000U | 0xfffU)) != 0x001e0000 || !mask ||
+                    (a & 1) || a > 248 || b > (offset ? 252U : 253U) || dest > 247 ||
+                    (count > 1 && ((dest & 1) || dest + 1 >= reserved_register)) ||
+                    (count <= 2 ? second != 255 : second >= reserved_register) ||
+                    (count == 4 && ((second & 1) || second + 1 >= reserved_register)))
                     return fail(index, "native bindless 2D sample mode");
-                emit(0xde80000000000000ULL | predicate | dest | (u64{a} << 8) |
-                     (u64{b} << 20) | (u64{2} << 28) | (u64{1} << 31) |
+                // Maxwell packs the channels from one register; past two they go through 250-253.
+                const u32 target = count > 2 ? 250U : static_cast<u32>(dest);
+                emit(0xde80000000000000ULL | predicate | target | (u64{a} << 8) |
+                     (u64{b} << 20) | (u64{2} << 28) | (u64{mask} << 31) |
                      (u64{offset} << 36) | (u64{7} << 51) | (u64{insn.Bits(90, 1)} << 49));
+                for (u32 component = 0; count > 2 && component < count; ++component)
+                    emit(0x5c98000000000000ULL | predicate | (u64{15} << 39) | (u64{250 + component} << 20) |
+                         (component < 2 ? static_cast<u32>(dest) + component : second + component - 2));
                 break;
             }
             const bool scalar = insn.Bits(60, 1);
