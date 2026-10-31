@@ -36,6 +36,7 @@
 #include "video_core/host1x/host1x.h"
 #include "video_core/host1x/syncpoint_manager.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
 
@@ -61,7 +62,9 @@ struct GPU::Impl {
         , use_nvdec{use_nvdec_}
         , shader_notify()
         , is_async{is_async_}
-    {}
+    {
+        VideoCommon::Nx2Profile::ReadEnv();
+    }
 
     ~Impl() = default;
 

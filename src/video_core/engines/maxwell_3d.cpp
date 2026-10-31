@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -34,6 +35,10 @@ namespace Tegra::Engines {
 /// First register id that is actually a Macro call.
 constexpr u32 MacroRegistersStart = 0xE00;
 
+// EDEN_NX2_3D_METHODS: log the first write to each 3D register (finds methods Eden doesn't model).
+// Read in the constructor, after Android has applied nx2_env.txt.
+static std::atomic<bool> g_trace_first_method_writes{false};
+
 Maxwell3D::Maxwell3D(MemoryManager& memory_manager_)
     : draw_manager()
     , memory_manager{memory_manager_}
@@ -44,6 +49,8 @@ Maxwell3D::Maxwell3D(MemoryManager& memory_manager_)
 #endif
     , upload_state{memory_manager, regs.upload}
 {
+    g_trace_first_method_writes.store(std::getenv("EDEN_NX2_3D_METHODS") != nullptr,
+                                      std::memory_order_relaxed);
     dirty.flags.flip();
     InitializeRegisterDefaults();
     execution_mask.reset();
@@ -459,9 +466,6 @@ void Maxwell3D::CallMacroMethod(Core::System& system, u32 method, std::span<cons
     draw_manager.DrawDeferred(*this);
 }
 
-// EDEN_NX2_3D_METHODS: log the first write to each 3D register (finds methods Eden doesn't model).
-static const bool g_trace_first_method_writes = std::getenv("EDEN_NX2_3D_METHODS") != nullptr;
-
 void Maxwell3D::TraceFirstMethodWrite(u32 method, u32 argument) {
     static std::array<bool, Regs::NUM_REGS> seen{};
     if (method < seen.size() && !seen[method]) {
@@ -487,7 +491,7 @@ void Maxwell3D::CallMethod(Core::System& system, u32 method, u32 method_argument
         ProcessMacro(system, method, &method_argument, 1, is_last_call);
         return;
     }
-    if (g_trace_first_method_writes) [[unlikely]] {
+    if (g_trace_first_method_writes.load(std::memory_order_relaxed)) [[unlikely]] {
         TraceFirstMethodWrite(method, method_argument);
     }
 

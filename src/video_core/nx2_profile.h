@@ -64,8 +64,13 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "fence skipped", "method", "split drain", "split wait",
 };
 
-// Read once at startup: Enabled() runs several times per method write (no guard to check).
-inline const bool g_enabled = std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr;
+// Set by ReadEnv when the GPU is created, not at library load: Android applies nx2_env.txt after
+// the library is loaded. A plain bool because Enabled() runs several times per method write.
+inline bool g_enabled = false;
+
+inline void ReadEnv() {
+    g_enabled = std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr;
+}
 
 inline bool Enabled() {
     return g_enabled;
