@@ -190,8 +190,8 @@ android {
             isDefault = true
             minSdk = 33
 
-            manifestPlaceholders += mapOf("appNameBase" to "Eden NX2A")
-            resValue("string", "app_name_suffixed", "Eden NX2A")
+            manifestPlaceholders += mapOf("appNameBase" to "Eden SX2A")
+            resValue("string", "app_name_suffixed", "Eden SX2A")
             applicationId = "dev.eden.nx2"
 
             ndk {
@@ -268,7 +268,7 @@ android {
     productFlavors.all {
         val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Eden"
         val suffix = if (isNightly) " Nightly" else ""
-        val appName = if (name == "mainline") "Eden NX2A" else "Eden"
+        val appName = if (name == "mainline") "Eden SX2A" else "Eden"
 
         // apply nightly suffix I/A
         resValue("string", "app_name_suffixed", "$currentName$suffix")
