@@ -3,6 +3,9 @@
 #include "core/core.h"
 #include <array>
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 #include <vector>
 #include <deque>
 #include <cstring>
@@ -126,6 +129,8 @@ private:
         }
         started = false;
         stream_ended = false;
+        stream_logged = false;
+        stats = {};
         if (submission_event) submission_event->Clear(kernel);
     }
 
@@ -216,6 +221,7 @@ private:
                 continue;
             }
             DecodedFrame frame{};
+            frame.planes = std::move(spare_planes);
             frame.bitdepth = 8;
             frame.format = 0;
             frame.matrix = 1;
@@ -306,6 +312,7 @@ private:
         }
         if (output) {
             DecodedFrame frame{};
+            frame.planes = std::move(spare_planes);
             frame.bitdepth = output->bitdepth;
             frame.format = static_cast<u32>(output->image_format);
             frame.matrix = static_cast<u32>(output->matrix_coefficients);
@@ -330,6 +337,77 @@ private:
         R_SUCCEED();
     }
 
+    // Writes a decoded frame to a pool image. NV12 pools take the planes as decoded, with the
+    // interleaved chroma plane after the luma plane (colour conversion is left to the game); RGBA
+    // pools take a BT.709 conversion swizzled to block linear. The scratch buffers are kept across
+    // frames and cleared when the geometry changes, so their padding stays zero.
+    Result WriteFrame(const DecodedFrame& frame, const NativeVideoImagePool& pool, u32 index, u32 pool_height) {
+        const u32 pitch = pool.layout.row_bytes;
+        const std::array<u32, 6> geometry{pool.layout.image_bytes, pitch, pool_height, frame.widths[0],
+                                          frame.heights[0], pool.layout.nv12 ? 1U : 0U};
+        if (geometry != scratch_geometry) {
+            scratch_geometry = geometry;
+            image_scratch.assign(pool.layout.image_bytes, 0);
+            rgba_scratch.assign(pool.layout.nv12 ? 0 : size_t{pitch / 4} * pool_height, 0);
+        }
+        if (pool.layout.nv12) {
+            for (u32 y = 0; y < frame.heights[0]; ++y)
+                std::memcpy(image_scratch.data() + size_t{y} * pitch,
+                            frame.planes[0].data() + size_t{y} * frame.widths[0], frame.widths[0]);
+            for (u32 y = 0; y < frame.heights[1]; ++y) {
+                u8* const row = image_scratch.data() + pool.layout.chroma_offset + size_t{y} * pitch;
+                const u8* const u_row = frame.planes[1].data() + size_t{y} * frame.widths[1];
+                const u8* const v_row = frame.planes[2].data() + size_t{y} * frame.widths[2];
+                for (u32 x = 0; x < frame.widths[1]; ++x) {
+                    row[x * 2] = u_row[x];
+                    row[x * 2 + 1] = v_row[x];
+                }
+            }
+        } else {
+            for (u32 y = 0; y < frame.heights[0]; ++y)
+                ConvertNativeVideoYuv709Row(rgba_scratch.data() + size_t{y} * (pitch / 4),
+                                            frame.planes[0].data() + size_t{y} * frame.widths[0],
+                                            frame.planes[1].data() + size_t{y / 2} * frame.widths[1],
+                                            frame.planes[2].data() + size_t{y / 2} * frame.widths[2],
+                                            frame.widths[0], frame.full_range);
+            const std::span<const u8> rgba{reinterpret_cast<const u8*>(rgba_scratch.data()),
+                                           rgba_scratch.size() * sizeof(u32)};
+            Tegra::Texture::SwizzleTexture(image_scratch, rgba, 4, pitch / 4, pool_height, 1, 4, 0, 1, true);
+        }
+        const u64 offset = u64{index} * pool.layout.image_stride;
+        system.GPU().InvalidateRegion(pool.device_address + offset, image_scratch.size());
+        R_UNLESS(process->GetMemory().WriteBlock(pool.address + offset, image_scratch.data(), image_scratch.size()),
+                 Kernel::ResultInvalidAddress);
+        R_SUCCEED();
+    }
+
+    // Logs each stream once; EDEN_NX2_VIDEO_STATS=1 adds decode and output timings every 5 seconds.
+    void LogStreamStats(const DecodedFrame& frame, const NativeVideoImagePool& pool, u32 pool_width, u32 pool_height) {
+        const char* const codec = !h264_context ? "AV1" : ffmpeg_vp9 ? "VP9" : "H.264";
+        if (!stream_logged) {
+            stream_logged = true;
+            LOG_INFO(Service_AM, "native video stream: codec={}, dimensions={}x{}, pool={} {}x{}", codec,
+                     frame.widths[0], frame.heights[0], pool.layout.nv12 ? "nv12" : "rgba", pool_width, pool_height);
+        }
+        static const bool enabled = [] {
+            const char* const value = std::getenv("EDEN_NX2_VIDEO_STATS");
+            return value && value[0] == '1';
+        }();
+        if (!enabled) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (stats.window_start == std::chrono::steady_clock::time_point{}) stats.window_start = now;
+        const auto elapsed = now - stats.window_start;
+        if (elapsed < std::chrono::seconds{5}) return;
+        const auto average_ms = [&](std::chrono::steady_clock::duration total) {
+            return std::chrono::duration<double, std::milli>(total).count() / stats.frames;
+        };
+        LOG_INFO(Service_AM, "native video {} stats: {:.1f} fps, decode {:.2f} ms, output {:.2f} ms per frame", codec,
+                 stats.frames / std::chrono::duration<double>(elapsed).count(), average_ms(stats.decode),
+                 average_ms(stats.convert));
+        stats = {};
+        stats.window_start = now;
+    }
+
     Result PumpOutput() {
         while (!decoded_frames.empty() || !pending_inputs.empty()) {
             auto image = registered_images.end();
@@ -337,10 +415,12 @@ private:
                 if (it->available && (image == registered_images.end() || it->completion_value < image->completion_value)) image = it;
             if (image == registered_images.end()) break;
             if (decoded_frames.empty()) {
+                const auto decode_start = std::chrono::steady_clock::now();
                 R_TRY(DecodePendingInput());
+                stats.decode += std::chrono::steady_clock::now() - decode_start;
                 if (decoded_frames.empty()) continue;
             }
-            const auto& frame = decoded_frames.front();
+            auto& frame = decoded_frames.front();
             const auto& pool = *image->pool;
             const u32 pool_width = (pool.packed_dimensions & 0xffffU) + 1;
             const u32 pool_height = (pool.packed_dimensions >> 16) + 1;
@@ -351,40 +431,13 @@ private:
                           frame.bitdepth, frame.format, frame.matrix, frame.widths[0], frame.heights[0]);
                 R_THROW(Kernel::ResultNotImplemented);
             }
-            if (!frame.eos && pool.layout.nv12) {
-                // NV12 pool: copy the planes as decoded, with the interleaved chroma plane after
-                // the luma plane; colour conversion is left to the game.
-                std::vector<u8> nv12(pool.layout.image_bytes);
-                const u32 pitch = pool.layout.row_bytes;
-                for (u32 y = 0; y < frame.heights[0]; ++y)
-                    std::memcpy(nv12.data() + size_t{y} * pitch, frame.planes[0].data() + size_t{y} * frame.widths[0],
-                                frame.widths[0]);
-                for (u32 y = 0; y < frame.heights[1]; ++y) {
-                    u8* row = nv12.data() + pool.layout.chroma_offset + size_t{y} * pitch;
-                    for (u32 x = 0; x < frame.widths[1]; ++x) {
-                        row[x * 2] = frame.planes[1][size_t{y} * frame.widths[1] + x];
-                        row[x * 2 + 1] = frame.planes[2][size_t{y} * frame.widths[2] + x];
-                    }
-                }
-                const u64 offset = u64{image->index} * pool.layout.image_stride;
-                system.GPU().InvalidateRegion(pool.device_address + offset, nv12.size());
-                R_UNLESS(process->GetMemory().WriteBlock(pool.address + offset, nv12.data(), nv12.size()), Kernel::ResultInvalidAddress);
-            } else if (!frame.eos) {
-                std::vector<u8> rgba(size_t{pool.layout.row_bytes} * pool_height);
-                for (u32 y = 0; y < frame.heights[0]; ++y) {
-                    for (u32 x = 0; x < frame.widths[0]; ++x) {
-                        const auto pixel = ConvertNativeVideoYuv709(frame.planes[0][y * frame.widths[0] + x],
-                            frame.planes[1][(y / 2) * frame.widths[1] + x / 2],
-                            frame.planes[2][(y / 2) * frame.widths[2] + x / 2], frame.full_range);
-                        std::memcpy(rgba.data() + y * pool.layout.row_bytes + x * 4, pixel.data(), pixel.size());
-                    }
-                }
-                std::vector<u8> tiled(pool.layout.image_bytes);
-                Tegra::Texture::SwizzleTexture(tiled, rgba, 4, pool.layout.row_bytes / 4,
-                                               pool_height, 1, 4, 0, 1, true);
-                const u64 offset = u64{image->index} * pool.layout.image_stride;
-                system.GPU().InvalidateRegion(pool.device_address + offset, tiled.size());
-                R_UNLESS(process->GetMemory().WriteBlock(pool.address + offset, tiled.data(), tiled.size()), Kernel::ResultInvalidAddress);
+            if (!frame.eos) {
+                const auto convert_start = std::chrono::steady_clock::now();
+                R_TRY(WriteFrame(frame, pool, image->index, pool_height));
+                stats.convert += std::chrono::steady_clock::now() - convert_start;
+                ++stats.frames;
+                LogStreamStats(frame, pool, pool_width, pool_height);
+                spare_planes = std::move(frame.planes);
             }
             std::array<u32, 16> properties{};
             properties[0] = image->id;
@@ -776,7 +829,10 @@ private:
                             } else {
                                 auto backend = std::make_unique<libgav1::Decoder>();
                                 libgav1::DecoderSettings settings;
-                                settings.threads = 4;
+                                // Threads split each frame (tiles, superblock rows, post filters).
+                                // Frame parallel decoding would need the inputs kept until libgav1
+                                // releases them and frames returned later than submitted.
+                                settings.threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()) - 2, 4, 8);
                                 if (backend->Init(&settings) == libgav1::kStatusOk) {
                                     transfer_memory = memory.GetPointerUnsafe();
                                     transfer_memory->Open(kernel);
@@ -820,6 +876,18 @@ private:
     bool started{};
     /// The end-of-stream frame was handed out and nothing was submitted since.
     bool stream_ended{};
+    bool stream_logged{};
+    struct StreamStats {
+        std::chrono::steady_clock::time_point window_start{};
+        std::chrono::steady_clock::duration decode{};
+        std::chrono::steady_clock::duration convert{};
+        u32 frames{};
+    } stats;
+    // Plane buffers of the last written frame, reused by the next decoded one.
+    std::array<std::vector<u8>, 3> spare_planes;
+    std::vector<u8> image_scratch;
+    std::vector<u32> rgba_scratch;
+    std::array<u32, 6> scratch_geometry{};
     Kernel::KProcess* process;
     NativeVideoKind kind;
     Kernel::KTransferMemory* transfer_memory{};
