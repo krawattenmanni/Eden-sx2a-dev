@@ -171,12 +171,19 @@ private:
     /// Returns whether anything was flushed. gpu_words is set when guest memory holds words the
     /// GPU wrote on these pages (flushed now or since the last writer), newer than a snapshot.
     bool FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu_words = nullptr);
+    /// EDEN_NX2_PBFLUSH_AHEAD: after a pushbuffer drain, flushes the other GPU-written pages the
+    /// rest of the current command list reads, so they need no drain of their own.
+    void FlushGpuWrittenAhead();
     /// Overwrites the words of an entry at address that lie on GPU-written pages with guest memory.
     void ReadGpuWrittenWords(GPUVAddr address, std::span<u32> words) const;
     /// EDEN_NX2_PB_CHECK: logs entries whose guest words changed since their submit snapshot.
     void CheckSnapshot(GPUVAddr address, std::span<const u32> snapshot);
     size_t command_resume_offset{};
     std::vector<u32> gpu_written_words; ///< A snapshot with GPU-written words read over it
+    std::vector<GPUVAddr> ahead_pages;  ///< FlushGpuWrittenAhead's pages
+    u64 ahead_epoch{};                  ///< Writer epoch of the last FlushGpuWrittenAhead
+    const CommandList* ahead_list{};    ///< and its list
+    size_t ahead_end{};                 ///< and the end of the entries it read
 
     void SetState(const CommandHeader& command_header);
 
