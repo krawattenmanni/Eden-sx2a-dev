@@ -70,7 +70,7 @@ struct Nx2FreshPage {
     u64 epoch;
     u64 dmaread_epoch;
 };
-inline std::array<Nx2FreshPage, 256> g_nx2_fresh_pages{};
+inline std::array<Nx2FreshPage, 4096> g_nx2_fresh_pages{};
 
 inline Nx2FreshPage& Nx2FreshSlot(u64 device_page) {
     return g_nx2_fresh_pages[device_page % g_nx2_fresh_pages.size()];
