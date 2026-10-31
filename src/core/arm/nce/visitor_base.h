@@ -31,6 +31,23 @@ public:
         return false;
     }
 
+    // ARMv8.1+ encodings added to the decoder table for Switch 2 code
+    virtual bool AtomicMemOp(Imm<2> size, bool A, bool R, Reg Rs, Imm<4> op, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool CompareAndSwapPair(bool sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool BRA_BLRA(bool Z, bool L, bool M, Reg Rn, Reg Rm) {
+        return false;
+    }
+    virtual bool STG_family(Imm<2> opc, Imm<9> imm9, Imm<2> mode, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool STGP(Imm<2> mode, Imm<7> imm7, Reg Rt2, Reg Rn, Reg Rt) {
+        return false;
+    }
+
     // Data processing - Immediate - PC relative addressing
     virtual bool ADR(Imm<2> immlo, Imm<19> immhi, Reg Rd) {
         return false;
@@ -513,7 +530,7 @@ public:
     virtual bool CASH(bool L, Reg Rs, bool o0, Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool CAS(bool sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt) {
+    virtual bool CAS(Imm<2> sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt) {
         return false;
     }
 
@@ -686,16 +703,16 @@ public:
     virtual bool LDAPRH(Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool LDADD(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
+    virtual bool LDADD(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool LDCLR(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
+    virtual bool LDCLR(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool LDEOR(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
+    virtual bool LDEOR(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool LDSET(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
+    virtual bool LDSET(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
         return false;
     }
     virtual bool LDSMAX(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
@@ -710,10 +727,10 @@ public:
     virtual bool LDUMIN(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool SWP(bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
+    virtual bool SWP(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt) {
         return false;
     }
-    virtual bool LDAPR(Reg Rn, Reg Rt) {
+    virtual bool LDAPR(Imm<2> size, Reg Rn, Reg Rt) {
         return false;
     }
 
