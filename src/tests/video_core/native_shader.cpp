@@ -5212,6 +5212,24 @@ TEST_CASE("Native uniform global reduction preserves its full pointer and wrappi
 }
 
 
+TEST_CASE("Native uniform global maximum reduction keeps its byte offset", "[native-shader]") {
+    const std::array<Native, 2> input{{{{0xff00798e, 0x400, 0x0d10e104, 0}}, VertexTransform.back()}};
+    Shader::ObjectPool<IR::Inst> pool;
+    IR::Block block{pool};
+    TranslateScalarNative(input, block);
+    for (u32 value : {0U, 17U, 0xfffffff8U}) {
+        ScalarNativeMachine machine;
+        machine.regs[220] = 0xfffffffc; machine.regs[221] = 0x21; machine.regs[0] = 17;
+        const u64 address = 0x2200000000ULL;
+        machine.global[address] = value;
+        machine.Execute(block);
+        REQUIRE(machine.global == std::unordered_map<u64, u32>{{address, std::max(value, 17U)}});
+        REQUIRE(machine.regs[220] == 0xfffffffc);
+        REQUIRE(machine.regs[221] == 0x21);
+    }
+}
+
+
 TEST_CASE("Native XOR and inverted outer-input LUTs retain data and predicate truth tables", "[native-shader]") {
     for (u32 lut : {4U, 0x0cU, 0x3cU}) {
         for (u32 destination : {0U, 1U, 2U, 3U}) {

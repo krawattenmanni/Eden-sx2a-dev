@@ -1356,24 +1356,22 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
                 (u64{1} << 29) | (u64{shuffle_mode} << 30) | (u64{insn.Bits(40, 13)} << 34) | (u64{insn.Bits(81, 3)} << 48));
             break;
         }
-        case 0x98e: { // RED.E.ADD/MAX.STRONG.GPU U32; uniform pointers support ADD.
+        case 0x98e: { // RED.E.STRONG.GPU U32 through a register or uniform pointer.
             u32 address = insn.Bits(24, 8);
-            // A register address may carry a byte offset: 24 bits signed natively, Maxwell RED keeps
-            // 20 (bits 28-47), as for ATOMG.
-            s32 offset = 0;
-            if ((insn.words[2] & ~0xffU) == 0x0c10e100 && address == 255 &&
-                insn.Bits(40, 24) == 0 && insn.Bits(64, 8) < 63 - 1 && !(insn.Bits(64, 8) & 1)) {
+            // The address may carry a byte offset: 24 bits signed natively, Maxwell RED keeps
+            // 20 (bits 28-47), as for ATOMG. Bits 87-89 pick ADD/MIN/MAX/INC/DEC/AND/OR/XOR.
+            const s32 offset = static_cast<s32>(insn.Bits(40, 24) << 8) >> 8;
+            if (offset < -(1 << 19) || offset >= (1 << 19))
+                return fail(index, "native global reduction mode");
+            if ((insn.words[2] & ~0x038000ffU) == 0x0c10e100 && address == 255 &&
+                insn.Bits(64, 8) < 63 - 1 && !(insn.Bits(64, 8) & 1)) {
                 const u32 uniform = uniform_register(insn.Bits(64, 8));
                 for (u32 word = 0; word < 2; ++word)
                     emit(0x5c98000000000000ULL | predicate | (250 + word) |
                          (u64{uniform + word} << 20) | (u64{15} << 39));
                 address = 250;
-            } else {
-                offset = static_cast<s32>(insn.Bits(40, 24) << 8) >> 8;
-                if ((insn.words[2] & ~0x03800000U) != 0x0010e100 || // bits 87-89 pick ADD/MIN/MAX/INC/DEC/AND/OR/XOR
-                    offset < -(1 << 19) || offset >= (1 << 19) || (address & 1)) {
-                    return fail(index, "native global reduction mode");
-                }
+            } else if ((insn.words[2] & ~0x03800000U) != 0x0010e100 || (address & 1)) {
+                return fail(index, "native global reduction mode");
             }
             emit(0xebf8000000000000ULL | predicate | insn.Bits(32, 8) |
                 (u64{address} << 8) | (u64{insn.Bits(87, 3)} << 23) |
