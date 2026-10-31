@@ -137,6 +137,7 @@ public:
         : ServiceFramework{system, "ISyncpointSupervisor"}, m_module{std::move(module)},
           m_context{system, "SyncpointSupervisor"} {
         static const FunctionInfo functions[] = {
+            {0, &ISyncpointSupervisor::Echo, "Echo"},
             {1, &ISyncpointSupervisor::GetMaximumEventCount, "GetMaximumEventCount"},
             {21, &ISyncpointSupervisor::SetEventCount, "SetEventCount"},
             {22, &ISyncpointSupervisor::GetEvent, "GetEvent"},
@@ -167,6 +168,21 @@ public:
 
 private:
     static constexpr u32 MaximumEventCount = 63;
+
+    // Older SDKs (MKW 1.0.0 nn::syncpt::sdk::Initialize) send the system tick and check it comes back.
+    void Echo(HLERequestContext& ctx) {
+        const auto* packet = ctx.CommandBuffer();
+        Result result = Kernel::ResultInvalidCombination;
+        u64 value{};
+        if (packet[0] == 0x10 && packet[1] == 2) {
+            value = u64{packet[2]} | (u64{packet[3]} << 32);
+            result = ResultSuccess;
+        }
+        LOG_DEBUG(Service_AM, "syncpoint echo value={:#x}, result={:#x}", value, result.raw);
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(result.raw);
+        rb.Push(value);
+    }
 
     void GetMaximumEventCount(HLERequestContext& ctx) {
         const auto* packet = ctx.CommandBuffer();
@@ -1582,6 +1598,11 @@ void IGraphicsSupervisor::Initialize(HLERequestContext& ctx) {
             result = Kernel::ResultNotImplemented;
         } else {
             m_phase = Phase::Initialized;
+            // Bootstrap flags 1 SDKs never send the image-context commands 1501/1502.
+            if (request->flags == 0x8000000000000001ULL) {
+                m_image_context_initialized = true;
+                m_image_formats_initialized = true;
+            }
             m_native_gpu_profile =
                 GraphicsSupervisorProtocol::NativeGpuProfileForBootstrap(request->flags);
             // Welcome Tour bootstraps with flags 5 but only embeds an sm_88 CUDA image; the driver's
@@ -1915,11 +1936,13 @@ void IGraphicsSupervisor::OpenGpuSession(HLERequestContext& ctx) {
     Result result = Kernel::ResultInvalidCombination;
     Kernel::KClientSession* client{};
     const u64 flags = u64{packet[2]} | (u64{packet[3]} << 32);
-    if (packet[0] == 0x201 && packet[1] == 2 && flags == 4) {
+    // flags is the SDK's gpu user version: 4, or 3 for older SDKs (MKW 1.0.0).
+    if (packet[0] == 0x201 && packet[1] == 2 && (flags == 3 || flags == 4)) {
         if (m_phase != Phase::Ready || !m_nv_module) {
             result = Kernel::ResultInvalidState;
         } else {
-            auto handler = std::make_shared<IGpuSession>(system, m_nv_module, m_process);
+            auto handler = std::make_shared<IGpuSession>(system, m_nv_module, m_process,
+                                                         static_cast<u32>(flags));
             result = CreateGraphicsSession(system, ctx, handler, &client);
             if (result.IsSuccess()) {
                 std::erase_if(m_gpu_sessions, [](const auto& item) { return item.expired(); });
@@ -2142,8 +2165,10 @@ void IGraphicsSupervisor::GetSyncpointSession(HLERequestContext& ctx) {
             std::make_shared<ISyncpointSupervisor>(system, m_nv_module), &client);
     }
     if (result.IsError()) {
-        IPC::ResponseBuilder rb{ctx, 2};
+        LOG_DEBUG(Service_AM, "syncpoint-supervisor session request failed, result={:#x}", result.raw);
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(result.raw);
+        ctx.AddMoveObject(nullptr);
         return;
     }
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
@@ -2153,9 +2178,12 @@ void IGraphicsSupervisor::GetSyncpointSession(HLERequestContext& ctx) {
 }
 
 void IGraphicsSupervisor::GetNvidiaDriver(HLERequestContext& ctx) {
+    // The SDK reads the move-handle slot before the result and closes it on failure.
     const auto Fail = [&](Result result) {
-        IPC::ResponseBuilder rb{ctx, 2};
+        LOG_DEBUG(Service_AM, "NVDRV session request failed, result={:#x}", result.raw);
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(result.raw);
+        ctx.AddMoveObject(nullptr);
     };
     const auto* packet = ctx.CommandBuffer();
     if (packet[0] != 0x58a || packet[1] != 0) {

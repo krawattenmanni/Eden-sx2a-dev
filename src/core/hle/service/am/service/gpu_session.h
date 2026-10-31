@@ -22,7 +22,7 @@ struct GpuDeviceRegistry;
 class IGpuSession final : public ServiceFramework<IGpuSession> {
 public:
     IGpuSession(Core::System& system, std::shared_ptr<Nvidia::Module> module,
-                Kernel::KProcess* process);
+                Kernel::KProcess* process, u32 user_version);
     ~IGpuSession() override;
     std::shared_ptr<Nvidia::Devices::nvhost_as_gpu> GetRegisteredAddressSpace(u32 id);
     Result RegisterAddressSpace(u32 id);
@@ -42,5 +42,6 @@ private:
     Kernel::KClientSession* m_worker{};
     Kernel::KProcess* const m_process;
     std::shared_ptr<Nvidia::Module> m_module;
+    const u32 m_user_version;
 };
 } // namespace Service::AM

@@ -493,9 +493,9 @@ private:
 } // namespace
 
 IGpuSession::IGpuSession(Core::System& system, std::shared_ptr<Nvidia::Module> module,
-                         Kernel::KProcess* process)
+                         Kernel::KProcess* process, u32 user_version)
     : ServiceFramework{system, "IGpuSession"},
-      m_process{process}, m_module{std::move(module)} {
+      m_process{process}, m_module{std::move(module)}, m_user_version{user_version} {
     m_process->Open(kernel);
     m_devices = std::make_shared<GpuDeviceRegistry>(system, m_module, m_process);
     static const FunctionInfo functions[] = {
@@ -510,6 +510,15 @@ IGpuSession::IGpuSession(Core::System& system, std::shared_ptr<Nvidia::Module> m
         {203, &IGpuSession::GetAddressSpacePartition, "GetUserPartition"},
     };
     RegisterHandlersTipc(functions);
+    if (m_user_version == 3) {
+        // User version 3 (MKW 1.0.0) numbers the partition queries one lower, and its user
+        // partition reply is only the {begin, end} pair.
+        static const FunctionInfo legacy_functions[] = {
+            {201, &IGpuSession::GetAddressSpacePartition, "GetGsvPartition"},
+            {202, &IGpuSession::GetAddressSpacePartition, "GetUserPartition"},
+        };
+        RegisterHandlersTipc(legacy_functions);
+    }
 }
 
 IGpuSession::~IGpuSession() {
@@ -556,7 +565,8 @@ void IGpuSession::GetAddressSpacePartition(HLERequestContext& ctx) {
     const auto* packet = ctx.CommandBuffer();
     Result result = Kernel::ResultInvalidCombination;
     std::array<u64, 9> values{};
-    const bool user = ctx.GetCommand() == 203;
+    const bool legacy = m_user_version == 3;
+    const bool user = ctx.GetCommand() == (legacy ? 202U : 203U);
     if (!user) {
         values[0] = ~u64{0}; // No supervisor-owned partition is reserved by this adapter.
     }
@@ -586,6 +596,13 @@ void IGpuSession::GetAddressSpacePartition(HLERequestContext& ctx) {
         LOG_DEBUG(Service_AM, "GPU partition command={}, id={}, begin={:#x}, end={:#x}, result={:#x}",
                   ctx.GetCommand(), id, user ? values[1] : values[0],
                   user ? values[2] : values[1], result.raw);
+    }
+    if (user && legacy) {
+        IPC::ResponseBuilder rb{ctx, 6};
+        rb.Push(result.raw);
+        rb.Push(values[1]);
+        rb.Push(values[2]);
+        return;
     }
     IPC::ResponseBuilder rb{ctx, user ? 20U : 6U};
     rb.Push(result.raw);
