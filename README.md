@@ -62,10 +62,9 @@ Default settings: CPU backend **Dynarmic**, GPU mode **Fast**, async presentatio
 asynchronous shaders **on**. Switch 2 games switch to the memory layout **12GB (Switch 2, Unsafe)** on their own.
 Keys and firmware are not needed for loose Switch 2 titles.
 
-The app needs no extra configuration: the GPU driver and the switches tested on the phone are built in. Switch 2 games
-run the GPU work on two threads (`EDEN_NX2_SPLIT=2`) with the faster command-list flush, which is quicker on phones
-than one thread. To try other values, put `KEY=VALUE` lines in `Android/data/dev.eden.nx2/files/nx2_env.txt`
-(for example `EDEN_NX2_SPLIT=0`); the file is read at app start.
+The app needs no extra configuration: the GPU driver and every fix tested on the phone are built in and always on.
+Switch 2 games run the GPU work on two threads with the faster command-list flush, which is quicker on phones than
+one thread.
 
 ### Troubleshooting
 
@@ -102,8 +101,6 @@ different game if a launch misbehaves.
 - **Memory:** the 10GB and 12GB layouts are unsafe. Android may kill the app, or other apps, under memory pressure.
 - **Heat and battery:** expect the phone to get hot and the battery to drain fast.
 - **Saves:** crashes can happen. Back up saves you care about, under `Android/data/dev.eden.nx2/files/`.
-- **Diagnostics:** the `EDEN_NX2_*` / `EDEN_NATIVE_*` switches are debugging aids. Some slow the game down a lot or fill
-  storage with logs.
 
 ### Known problems
 
@@ -119,7 +116,7 @@ different game if a launch misbehaves.
 ### What this fork adds on top of Eden-NS2
 
 - **Android app:** 10 GB and 12 GB memory layouts, launching loose ExeFS dumps by real path, loose DLC
-  (`dlc/<title id>/<version>/romfs`), `EDEN_*` switches from `files/nx2_env.txt`, Switch 2 defaults, the bundled Turnip
+  (`dlc/<title id>/<version>/romfs`), Switch 2 defaults, the bundled Turnip
   driver, and ending the game when the app is swiped away.
 - **arm64 macro JIT:** the GPU's macro programs had only an x86-64 JIT; an arm64 backend (oaknut) runs them about 5x
   faster than the interpreter. Fuzzed against the interpreter with 0 mismatches (`tools/nx2/jit_fuzz/`).
@@ -129,11 +126,11 @@ different game if a launch misbehaves.
 - **Memory:** Dynarmic's arm64 per-block metadata in vectors (it was over 1 GiB) and guest thread stacks left
   uninitialized (about 490 MiB saved).
 - **Pushbuffer flush:** Eden-NS2's flush of GPU-written command words (DK Bananza's destructible terrain) is turned on for
-  Switch 2 games, and skips the waits for pages already flushed since the last compute or copy work
-  (`EDEN_NX2_PBFLUSH_EPOCH`). Since v0.2.1 it also flushes the rest of a command list's GPU-written pages ahead, with
-  one host GPU wait (`EDEN_NX2_PBFLUSH_AHEAD`, `EDEN_NX2_PBFLUSH_BATCH`).
+  Switch 2 games, and skips the waits for pages already flushed since the last compute or copy work.
+  Since v0.2.1 it also flushes the rest of a command list's GPU-written pages ahead, with
+  one host GPU wait.
 - **GPU thread split on phones:** fewer front-thread waits (per-call-site drain counts, acquires and binds that skip the
-  drain, `EDEN_NX2_DMAREAD_EPOCH`), so the split is on by default on Android too.
+  drain, a separate epoch for DMA reads), so the split is on by default on Android too.
 - **Fixes:** a crash on unmapped texture buffers (Pokopia), and Mario Kart World 1.0.0's older SDK (graphics boot
   flags, GPU session and its address space partition queries, display interface version 1, output encoding 0x5).
 - **Shaders and video:** a multi-channel bindless 2D sample form in the shader lowering (Welcome Tour), Generic31Y/Z/W
