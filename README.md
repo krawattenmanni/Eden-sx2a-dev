@@ -7,9 +7,9 @@
 > **This is an unofficial, experimental fork. It is not Eden, and the Eden team does not support it.**
 > Please do not report problems from this build to the Eden project, Eden-NS2 or Takoroka.
 
-## Eden NX2 for Android
+## Eden SX2A (Eden NX2 for Android)
 
-Android build of Switch 2 emulation. Since v0.2.1 it is built on [Eden-NS2](https://github.com/0x2593/Eden-NS2)
+Android build of Switch 2 emulation, shown as **Eden SX2A** on the home screen. Since v0.2.1 it is built on [Eden-NS2](https://github.com/0x2593/Eden-NS2)
 (0x2593's Switch 2 fork of Eden) and follows it with ordinary merges; this fork adds the Android app layer and the
 fixes needed on phones. Versions up to v0.2 were built on [Takoroka's eden-nx2](https://git.eden-emu.dev/Takoroka/eden-nx2).
 Eden-NS2's own README follows below this section.
@@ -60,9 +60,10 @@ supported for Switch 2 titles.
 
 **In the games list:** add the folder that holds your dumps (for example `Switch2/`) as a game folder in Settings, and
 grant All files access. Each loose game then shows up in the list once, with its newest update (else the base game).
-Turn on deep scan for that folder if your updates sit under `updates/<version>/` more than three folders down.
+A folder like `Switch2/Game/updates/<version>/exefs` is found from `Switch2/`. If you add a folder higher up (for example
+the storage root), turn on deep scan for it so updates are found too; that makes refreshing the list slower.
 
-**Readiness check:** Settings → **Switch 2 readiness check** lists what is missing on your phone (RAM, Android version,
+**Readiness check:** Settings → **Switch 2 readiness check** (the first entry) lists what is missing on your phone (RAM, Android version,
 GPU driver, recommended settings, All files access, games found, free storage, battery setting), with a button to fix
 each one where the app has a screen for it.
 
@@ -75,6 +76,11 @@ Switch 2 games run the GPU work on two threads with the faster command-list flus
 one thread.
 
 ### Troubleshooting
+
+Start with Settings → **Switch 2 readiness check**: it finds most setup problems on its own.
+
+**A loose game is not in the games list.** Grant All files access, check that the folder you added contains the game
+(or turn on deep scan for it), then refresh the list. **Launch ExeFS game folder** works either way.
 
 **The app closes on its own, with no error.** Usually Android's low-memory killer, not a crash.
 - Keep the game in front, close other apps first, and set battery usage for Eden SX2A to Unrestricted. Exclude it from
@@ -113,7 +119,7 @@ different game if a launch misbehaves.
 ### Known problems
 
 - **Low frame rate**: about 5-20 FPS in DK Bananza, around 20 FPS in Pokopia; being investigated.
-- **Mario Kart World 1.0.0** boots and races, but some shaders are not supported yet (dark road, missing surfaces), some
+- **Mario Kart World 1.0.0** boots and races, but its mesh shaders are not supported yet (dark road, missing surfaces), some
   frames in races flicker, and it can crash with a GPU error while a course loads. Newer updates are untested.
 - **First loads** take minutes while shaders are built; later loads are faster.
 - **Stock Qualcomm driver:** two pipelines fail to build, so parts of the scene (DK Bananza's ground) are missing.
@@ -142,8 +148,9 @@ different game if a launch misbehaves.
   drain, a separate epoch for DMA reads), so the split is on by default on Android too.
 - **Fixes:** a crash on unmapped texture buffers (Pokopia), and Mario Kart World 1.0.0's older SDK (graphics boot
   flags, GPU session and its address space partition queries, display interface version 1, output encoding 0x5).
-- **Shaders and video:** a multi-channel bindless 2D sample form in the shader lowering (Welcome Tour), Generic31Y/Z/W
-  attributes, and faster video frame output.
+- **Shaders and video:** a multi-channel bindless 2D sample form in the shader lowering (Welcome Tour), uniform shifts,
+  reductions with uniform pointers and uniform predicate tables (Mario Kart World), Generic31Y/Z/W attributes, and faster
+  video frame output.
 
 Licence: GPLv3 or later, same as Eden. Every release is built from the tagged commit in this repo.
 More detail: [NX2_ANDROID.md](NX2_ANDROID.md).
