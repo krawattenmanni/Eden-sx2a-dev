@@ -24,6 +24,7 @@
 #include "video_core/memory_manager.h"
 #include "video_core/native_query_trace.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Tegra::Engines {
@@ -217,6 +218,9 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             split.NoteRelease(sequence_address);
         }
     } else {
+        if (dma_pusher.channel_state.native_abi) {
+            VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
+        }
         // An acquire reads what earlier work released: let the split's back thread finish it.
         // A GEQUAL acquire that guest memory already meets needs no wait: the counters only
         // grow, so whatever the back still writes meets it too. Each wait stops the front until
@@ -255,7 +259,11 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                     }
                 }
                 if (!ready()) {
-                    dma_pusher.rasterizer->ReleaseFences(true);
+                    {
+                        VideoCommon::Nx2Profile::Scope wait_scope{
+                            VideoCommon::Nx2Profile::Zone::AcquireFenceWait};
+                        dma_pusher.rasterizer->ReleaseFences(true);
+                    }
                     word = ReadNativeSemaphoreWord(dma_pusher, regs.semaphore_address.SemaphoreAddress());
                     static u32 native_wait_traces{};
                     if (ready() && VideoCommon::NativeDrawDiagnosticsEnabled() && native_wait_traces++ < 8) {
@@ -268,6 +276,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                         if (auto context = dma_pusher.channel_state.native_macro_context) context->engine.native_execution_failed = true;
                         LOG_ERROR(HW_GPU, "Unsupported native semaphore operation {}", static_cast<u32>(op));
                     } else {
+                        VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireWaits, 1);
                         native_acquire = NativeSemaphoreWait{regs.semaphore_address.SemaphoreAddress(), regs.semaphore_sequence, static_cast<u32>(op)};
                         VideoCommon::TraceNativeQuery(4, dma_pusher.memory_manager.GetID(), native_acquire->address,
                             dma_pusher.memory_manager.GpuToCpuAddress(native_acquire->address).value_or(0),
