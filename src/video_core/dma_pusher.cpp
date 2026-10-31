@@ -68,17 +68,6 @@ bool PbFlushEpochEnabled() {
     static const bool enabled = Nx2EnvDefaultOn("EDEN_NX2_PBFLUSH_EPOCH");
     return enabled && Nx2Program();
 }
-// Front thread only. Bumped when work that may write GPU memory is sent.
-u64 g_writer_epoch = 1;
-struct FreshPage {
-    u64 device_page;
-    u64 epoch;
-};
-std::array<FreshPage, 256> g_fresh_pages{};
-
-FreshPage& FreshSlot(u64 device_page) {
-    return g_fresh_pages[device_page % g_fresh_pages.size()];
-}
 
 void ReportPbFlushStats() {
     using Clock = std::chrono::steady_clock;
@@ -108,6 +97,8 @@ DmaPusher::~DmaPusher() = default;
 
 void DmaPusher::DispatchCalls() {
     dma_state.is_last_call = true;
+    // Guest CPU writes held back for GPU-written pages are applied before this submit.
+    Nx2DmaReadWriter();
     auto& split = VideoCommon::GpuSplit::Get();
     if (split.Active()) {
         split.SetAfterMethod(channel_state.native_abi ? &FailedNativeWorkHook : nullptr, this);
@@ -364,7 +355,7 @@ void DmaPusher::CallMethod(u32 argument) {
             return;
         }
         if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
-            ++g_writer_epoch;
+            ++g_nx2_writer_epoch;
         }
         if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
@@ -410,7 +401,7 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
             return;
         }
         if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
-            ++g_writer_epoch;
+            ++g_nx2_writer_epoch;
         }
         if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
@@ -481,8 +472,7 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu
         }
         written = true;
         const u64 device_page = *device >> Nx2WrittenPageBits;
-        const FreshPage& slot = FreshSlot(device_page);
-        if (!epoch || slot.device_page != device_page || slot.epoch != g_writer_epoch) {
+        if (!epoch || !Nx2IsFresh(device_page)) {
             stale = true;
             break;
         }
@@ -524,7 +514,7 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size, bool* gpu
         for (GPUVAddr page = flush_begin; page < flush_end; page += 0x1000) {
             if (const auto device = memory_manager.GpuToCpuAddress(page)) {
                 const u64 device_page = *device >> Nx2WrittenPageBits;
-                FreshSlot(device_page) = {device_page, g_writer_epoch};
+                Nx2FreshSlot(device_page) = {device_page, g_nx2_writer_epoch};
             }
         }
     }

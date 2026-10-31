@@ -58,6 +58,44 @@ inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
     }
 }
 
+// The split GPU thread's front only. Bumped when the front sends work that may write guest
+// memory other than 3D draws; a page drained and flushed in the current epoch is read again
+// without a drain (EDEN_NX2_PBFLUSH_EPOCH, EDEN_NX2_DMAREAD_EPOCH).
+inline u64 g_nx2_writer_epoch = 1;
+struct Nx2FreshPage {
+    u64 device_page;
+    u64 epoch;
+};
+inline std::array<Nx2FreshPage, 256> g_nx2_fresh_pages{};
+
+inline Nx2FreshPage& Nx2FreshSlot(u64 device_page) {
+    return g_nx2_fresh_pages[device_page % g_nx2_fresh_pages.size()];
+}
+
+[[nodiscard]] inline bool Nx2IsFresh(u64 device_page) {
+    const Nx2FreshPage& slot = Nx2FreshSlot(device_page);
+    return slot.device_page == device_page && slot.epoch == g_nx2_writer_epoch;
+}
+
+// EDEN_NX2_DMAREAD_EPOCH=1 (off by default): a front macro's MME DMA read from pages flushed in
+// the current epoch skips the drain, as the pushbuffer flush does. The epoch then also moves on
+// with each submit, semaphore release, 3D upload and report, cache flush or invalidation; only
+// 3D draws (shader stores) are assumed not to write what the macros read.
+[[nodiscard]] inline bool Nx2DmaReadEpoch() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_DMAREAD_EPOCH");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled && Nx2Program();
+}
+
+/// Work that may write guest memory the DMA-read epoch doesn't otherwise see was sent.
+inline void Nx2DmaReadWriter() {
+    if (Nx2DmaReadEpoch()) {
+        ++g_nx2_writer_epoch;
+    }
+}
+
 /// A new emulation session starts: no page has been written by its GPU yet.
 inline void Nx2ClearGpuWrittenPages() {
     for (auto& word : g_nx2_gpu_written_pages) {

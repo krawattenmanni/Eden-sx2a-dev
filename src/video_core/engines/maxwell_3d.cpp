@@ -23,6 +23,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/texture.h"
@@ -886,6 +887,26 @@ bool FrontHandledOutsideDrawManager(u32 method) {
     }
 }
 
+// Where the next constant buffer data word goes (ProcessCBMultiData), from raw registers.
+GPUVAddr ConstBufferWriteAddress(const u32* regs) {
+    return ((GPUVAddr{regs[MAXWELL3D_REG_INDEX(const_buffer.address_high)]} << 32) |
+            regs[MAXWELL3D_REG_INDEX(const_buffer.address_low)]) +
+           regs[MAXWELL3D_REG_INDEX(const_buffer.offset)];
+}
+
+// EDEN_NX2_DMAREAD_EPOCH: the back will write [address, address + bytes) (a constant buffer
+// upload), so a DMA read there drains first.
+void UnfreshPages(MemoryManager& memory, GPUVAddr address, size_t bytes) {
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < address + bytes; page += 0x1000) {
+        if (const auto device = memory.GpuToCpuAddress(page)) {
+            const u64 device_page = *device >> Nx2WrittenPageBits;
+            if (Nx2IsFresh(device_page)) {
+                Nx2FreshSlot(device_page).epoch = 0;
+            }
+        }
+    }
+}
+
 // EDEN_NX2_SPLIT_SKIP=0: send state writes that keep the register's value too.
 bool FrontSkipSame() {
     static const bool skip = [] {
@@ -975,8 +996,17 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
         case MAXWELL3D_REG_INDEX(falcon[4]):
             fs.regs[MAXWELL3D_REG_INDEX(shadow_scratch)] = 1;
             break;
+        case MAXWELL3D_REG_INDEX(report_semaphore.query):
+        case MAXWELL3D_REG_INDEX(launch_dma):
+        case MAXWELL3D_REG_INDEX(inline_data):
+        case MAXWELL3D_REG_INDEX(invalidate_texture_data_cache):
+            Nx2DmaReadWriter();
+            break;
         default:
             if (method >= cb_data && method < cb_data + 16) {
+                if (Nx2DmaReadEpoch()) {
+                    UnfreshPages(memory_manager, ConstBufferWriteAddress(fs.regs.data()), sizeof(u32));
+                }
                 fs.regs[MAXWELL3D_REG_INDEX(const_buffer.offset)] += sizeof(u32);
             } else if (!FrontHandledOutsideDrawManager(method)) {
                 fs.draw_pending = true;
@@ -1028,9 +1058,13 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
                fs.control == Regs::ShadowRamControl::TrackWithFilter;
     };
     if (method >= cb_data && method < cb_data + 16) {
+        if (Nx2DmaReadEpoch()) {
+            UnfreshPages(memory_manager, ConstBufferWriteAddress(fs.regs.data()), amount * sizeof(u32));
+        }
         fs.regs[MAXWELL3D_REG_INDEX(const_buffer.offset)] += amount * sizeof(u32);
     } else if (method == MAXWELL3D_REG_INDEX(inline_data)) {
         // Upload data only.
+        Nx2DmaReadWriter();
     } else if ((method == MAXWELL3D_REG_INDEX(draw_inline_index) ||
                 method == MAXWELL3D_REG_INDEX(inline_index_2x16.even) ||
                 method == MAXWELL3D_REG_INDEX(inline_index_4x8.index0)) &&
@@ -1084,6 +1118,11 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
             }
             case MAXWELL3D_REG_INDEX(falcon[4]):
                 fs.regs[MAXWELL3D_REG_INDEX(shadow_scratch)] = 1;
+                break;
+            case MAXWELL3D_REG_INDEX(report_semaphore.query):
+            case MAXWELL3D_REG_INDEX(launch_dma):
+            case MAXWELL3D_REG_INDEX(invalidate_texture_data_cache):
+                Nx2DmaReadWriter();
                 break;
             default:
                 if (!FrontHandledOutsideDrawManager(method)) {
@@ -1149,9 +1188,6 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
 
 void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
                              u32 count) {
-    // The words may be written by methods still queued for the back (indirect draw arguments
-    // from a culling dispatch), and the caches that may hold newer ones belong to it.
-    split.Drain(VideoCommon::Nx2Profile::DrainSite::DmaRead);
     const GPUVAddr source = (GPUVAddr{fs.regs[0x154] & 0x1ffffff} << 32) | fs.regs[0x155];
     const u32 ram = fs.regs[0x156];
     const u32 words = std::min<u32>(count, 0x1000);
@@ -1159,9 +1195,37 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }
-    if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
-        memory_manager.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+    const GPUVAddr page_begin = source & ~GPUVAddr{0xfff};
+    const GPUVAddr page_end = (source + read_bytes + 0xfff) & ~GPUVAddr{0xfff};
+    bool fresh = false;
+    if (Nx2DmaReadEpoch() && read_bytes != 0) {
+        fresh = true;
+        for (GPUVAddr page = page_begin; page < page_end && fresh; page += 0x1000) {
+            const auto device = memory_manager.GpuToCpuAddress(page);
+            fresh = device && Nx2IsFresh(*device >> Nx2WrittenPageBits);
+        }
     }
+    if (!fresh) {
+        // The words may be written by methods still queued for the back (indirect draw
+        // arguments from a culling dispatch), and the caches that may hold newer ones belong to
+        // it. With EDEN_NX2_DMAREAD_EPOCH, whole pages, so later reads on them need no drain.
+        split.Drain(VideoCommon::Nx2Profile::DrainSite::DmaRead);
+        const bool epoch = Nx2DmaReadEpoch();
+        const GPUVAddr flush_begin = epoch ? page_begin : source;
+        const size_t flush_size = epoch ? page_end - page_begin : read_bytes;
+        if (memory_manager.IsMemoryDirty(flush_begin, flush_size, VideoCommon::CacheType::BufferCache)) {
+            memory_manager.FlushRegion(flush_begin, flush_size, VideoCommon::CacheType::BufferCache);
+        }
+        if (epoch) {
+            for (GPUVAddr page = page_begin; page < page_end; page += 0x1000) {
+                if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+                    const u64 device_page = *device >> Nx2WrittenPageBits;
+                    Nx2FreshSlot(device_page) = {device_page, g_nx2_writer_epoch};
+                }
+            }
+        }
+    }
+    const size_t first = fs.fifo.size();
     for (u32 i = 0; i < words; ++i) {
         const u32 word = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
         if (method == 0x158) {
@@ -1169,6 +1233,36 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         } else if (ram + i < native_data_ram.size()) {
             native_data_ram[ram + i] = word;
         }
+    }
+    if (fresh && VideoCommon::Nx2Profile::Enabled()) {
+        // Check the assumption: what the back reads at this point of the stream after a flush.
+        std::vector<u32> seen(words);
+        for (u32 i = 0; i < words; ++i) {
+            seen[i] = method == 0x158 ? fs.fifo[first + i]
+                                      : (ram + i < native_data_ram.size() ? native_data_ram[ram + i]
+                                                                          : 0);
+        }
+        split.DeferFunction([memory = &memory_manager, source, read_bytes, method, ram,
+                             seen = std::move(seen)] {
+            static u64 checks{};
+            static u64 stale{};
+            ++checks;
+            if (memory->IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
+                memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+            }
+            for (size_t i = 0; i < seen.size(); ++i) {
+                if (method == 0x157 && ram + i >= 0xc00) {
+                    break;
+                }
+                if (memory->Read<u32>(source + i * sizeof(u32)) != seen[i]) {
+                    if (stale++ < 16 || stale % 1000 == 0) {
+                        LOG_WARNING(HW_GPU, "MME DMA read without drain was stale: {:#x}+{} word {} ({} of {} checks)",
+                                    source, read_bytes, i, stale, checks);
+                    }
+                    break;
+                }
+            }
+        });
     }
 }
 
