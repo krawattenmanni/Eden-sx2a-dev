@@ -145,6 +145,10 @@ void NVDRV::Ioctl3(HLERequestContext& ctx) {
             std::span<u8>{inline_output_buffer.data(), inline_output_buffer.size()},
             native_gpu_profile);
     }
+    if (nv_result != NvResult::Success && ctx.GetThread().GetOwnerProcess()->UsesPAuthReturns()) {
+        LOG_DEBUG(Service_NVDRV, "native ioctl failure fd={}, ioctl={:#x}, result={}, caller={:#x}",
+                  fd, command.raw, static_cast<u32>(nv_result), ctx.GetThread().GetContext().lr);
+    }
     if (command.raw == 0xc0e04705 || command.raw == 0xc0e84705) {
         LOG_DEBUG(Service_NVDRV, "native characteristics input={}, output={}, inline={}, result={}",
                   input_buffer.size(), output_buffer.size(), inline_output_buffer.size(),
@@ -171,6 +175,7 @@ void NVDRV::Close(HLERequestContext& ctx) {
 
     IPC::RequestParser rp{ctx};
     const auto fd = rp.Pop<DeviceFD>();
+    LOG_DEBUG(Service_NVDRV, "close fd={}, caller={:#x}", fd, ctx.GetThread().GetContext().lr);
     const auto result = nvdrv->Close(fd);
 
     IPC::ResponseBuilder rb{ctx, 3};

@@ -139,6 +139,8 @@ NvResult nvhost_ctrl_gpu::Ioctl3(DeviceFD fd, Ioctl command, std::span<const u8>
             // -EINVAL only when the buffer is smaller than two bytes per SM, and fills exactly
             // one pair per SM of a larger buffer.
             constexpr size_t sm_count = 4;
+            LOG_DEBUG(Service_NVDRV, "VSMS mapping input={}, output={}, inline={}", input.size(),
+                      output.size(), inline_output.size());
             if (command.raw != 0xc0084713 || input.size() != 8 || output.size() != 8 ||
                 inline_output.size() < sm_count * 2) {
                 return NvResult::BadParameter;
