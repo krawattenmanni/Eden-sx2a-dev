@@ -237,8 +237,10 @@ constexpr u32 NativeGpuProfileForBootstrap(u64 flags) {
     }
 }
 
+// Flags 1 comes from older SDKs (Mario Kart World 1.0.0, nn::gsv::BootWithRemoteMemory); it keeps
+// the default GPU profile.
 inline bool IsLocalBootstrap(const BootstrapRequest& request) {
-    return (request.flags == 0x8000000000000005ULL ||
+    return (request.flags == 0x8000000000000001ULL || request.flags == 0x8000000000000005ULL ||
             request.flags == 0x8000000000000006ULL || request.flags == 0x8000000000000007ULL) &&
            std::ranges::all_of(request.parameters, [](u64 value) { return value == 0; });
 }
