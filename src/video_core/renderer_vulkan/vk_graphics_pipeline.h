@@ -123,6 +123,11 @@ public:
         return is_built.load(std::memory_order::relaxed);
     }
 
+    /// False when the driver failed to build the pipeline (or it is still building).
+    [[nodiscard]] bool IsBound() const noexcept {
+        return static_cast<bool>(pipeline);
+    }
+
     template <typename Spec>
     static auto MakeConfigureSpecFunc() {
         return [](GraphicsPipeline* pl, bool is_indexed) { return pl->ConfigureImpl<Spec>(is_indexed); };

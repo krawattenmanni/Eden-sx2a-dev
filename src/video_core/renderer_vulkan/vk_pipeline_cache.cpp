@@ -857,6 +857,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const
     // If something is using depth, we can assume that games are not rendering anything which
     // will be used one time.
     if (maxwell3d->regs.zeta_enable) {
+        draw_deferred = true;
         return nullptr;
     }
     // If games are using a small index count, we can assume these are full screen quads.
