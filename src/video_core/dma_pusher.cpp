@@ -4,8 +4,11 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <limits>
 
 #include "common/logging.h"
 #include "common/settings.h"
@@ -25,6 +28,70 @@ namespace Tegra {
 
 constexpr u32 MacroRegistersStart = 0xE00;
 constexpr u32 ComputeInline = 0x6D;
+
+namespace {
+// EDEN_NX2_PBFLUSH_STATS=1: what the pushbuffer flush checks and what it costs, every 5 s.
+struct PbFlushStats {
+    std::atomic<u64> checked{};
+    std::array<std::atomic<u64>, 3> hits{}; ///< Entries on a GPU-written page: <=8, <=64, >64 words
+    std::atomic<u64> skipped{};             ///< Hits over EDEN_NX2_PBFLUSH_MAX, not flushed
+    std::atomic<u64> fresh{};               ///< Hits whose pages were flushed since the last writer
+    std::atomic<u64> drains{};
+    std::atomic<u64> flushes{};
+};
+PbFlushStats g_pbflush_stats;
+// Read on first use: Android sets the switches after the library is loaded.
+bool PbFlushStatsEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_PBFLUSH_STATS");
+        return value != nullptr && value[0] != '0';
+    }();
+    return enabled;
+}
+// EDEN_NX2_PBFLUSH_MAX: largest entry flushed, in words (diagnostics; no limit by default).
+size_t PbFlushMaxWords() {
+    static const size_t words = [] {
+        const char* value = std::getenv("EDEN_NX2_PBFLUSH_MAX");
+        return value != nullptr ? static_cast<size_t>(std::strtoull(value, nullptr, 0))
+                                : (std::numeric_limits<size_t>::max)();
+    }();
+    return words;
+}
+
+// EDEN_NX2_PBFLUSH_EPOCH (on by default for Switch 2 programs, =0 off): an entry on pages flushed
+// (with a drain) since the front last sent work to an engine other than 3D is read without another
+// drain. Assumes the words are written by compute or copies, not by 3D draws.
+bool PbFlushEpochEnabled() {
+    static const bool enabled = Nx2EnvDefaultOn("EDEN_NX2_PBFLUSH_EPOCH");
+    return enabled && g_nx2_ampere.load(std::memory_order_relaxed);
+}
+// Front thread only. Bumped when work that may write GPU memory is sent.
+u64 g_writer_epoch = 1;
+struct FreshPage {
+    u64 device_page;
+    u64 epoch;
+};
+std::array<FreshPage, 256> g_fresh_pages{};
+
+FreshPage& FreshSlot(u64 device_page) {
+    return g_fresh_pages[device_page % g_fresh_pages.size()];
+}
+
+void ReportPbFlushStats() {
+    using Clock = std::chrono::steady_clock;
+    static Clock::time_point last = Clock::now();
+    const auto now = Clock::now();
+    if (now - last < std::chrono::seconds{5}) {
+        return;
+    }
+    last = now;
+    auto& s = g_pbflush_stats;
+    const auto take = [](std::atomic<u64>& counter) { return counter.exchange(0, std::memory_order_relaxed); };
+    LOG_INFO(HW_GPU, "NX2 pbflush stats: checked {} hits <=8 {} <=64 {} >64 {} skipped {} fresh {} drains {} flushes {}",
+             take(s.checked), take(s.hits[0]), take(s.hits[1]), take(s.hits[2]), take(s.skipped),
+             take(s.fresh), take(s.drains), take(s.flushes));
+}
+} // Anonymous namespace
 
 DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
     : system{system_}
@@ -274,6 +341,9 @@ void DmaPusher::CallMethod(u32 argument) {
         });
     } else {
         auto subchannel = subchannels[dma_state.subchannel];
+        if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
+            ++g_writer_epoch;
+        }
         if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
             if (split.FrontMacros()) {
@@ -313,6 +383,9 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         puller.CallMultiMethod(*this, dma_state.method, dma_state.subchannel, base_start, num_methods, dma_state.method_count);
     } else {
         auto subchannel = subchannels[dma_state.subchannel];
+        if (subchannel_type[dma_state.subchannel] != Engines::EngineTypes::Maxwell3D) {
+            ++g_writer_epoch;
+        }
         if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
             if (split.FrontMacros()) {
@@ -357,23 +430,73 @@ bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     if (!g_nx2_ampere.load(std::memory_order_relaxed) || size == 0) {
         return false;
     }
+    const bool stats = PbFlushStatsEnabled();
+    if (stats) {
+        ReportPbFlushStats();
+        g_pbflush_stats.checked.fetch_add(1, std::memory_order_relaxed);
+    }
+    const bool epoch = PbFlushEpochEnabled();
     bool written = false;
-    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < address + size; page += 0x1000) {
-        if (const auto device = memory_manager.GpuToCpuAddress(page); device && Nx2IsGpuWritten(*device)) {
-            written = true;
+    bool stale = false;
+    const GPUVAddr end = address + size;
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < end; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        if (!device || !Nx2IsGpuWritten(*device)) {
+            continue;
+        }
+        written = true;
+        const u64 device_page = *device >> Nx2WrittenPageBits;
+        const FreshPage& slot = FreshSlot(device_page);
+        if (!epoch || slot.device_page != device_page || slot.epoch != g_writer_epoch) {
+            stale = true;
             break;
         }
     }
     if (!written) {
         return false;
     }
+    const size_t words = size / sizeof(u32);
+    if (stats) {
+        g_pbflush_stats.hits[words <= 8 ? 0 : words <= 64 ? 1 : 2].fetch_add(1, std::memory_order_relaxed);
+    }
+    if (words > PbFlushMaxWords()) {
+        if (stats) {
+            g_pbflush_stats.skipped.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    }
+    if (!stale) {
+        // Flushed since the front last sent work that may write these pages.
+        if (stats) {
+            g_pbflush_stats.fresh.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    }
+    // With EDEN_NX2_PBFLUSH_EPOCH, whole pages, so later entries on them need no drain.
+    const GPUVAddr flush_begin = epoch ? address & ~GPUVAddr{0xfff} : address;
+    const GPUVAddr flush_end = epoch ? (end + 0xfff) & ~GPUVAddr{0xfff} : end;
+    const size_t flush_size = flush_end - flush_begin;
     // The caches belong to the split's back: it first runs what the front queued (the dispatch
     // that writes these words among it).
     VideoCommon::GpuSplit::Get().Drain();
-    if (!memory_manager.IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache)) {
+    if (stats) {
+        g_pbflush_stats.drains.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (epoch) {
+        for (GPUVAddr page = flush_begin; page < flush_end; page += 0x1000) {
+            if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+                const u64 device_page = *device >> Nx2WrittenPageBits;
+                FreshSlot(device_page) = {device_page, g_writer_epoch};
+            }
+        }
+    }
+    if (!memory_manager.IsMemoryDirty(flush_begin, flush_size, VideoCommon::CacheType::BufferCache)) {
         return false;
     }
-    memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
+    memory_manager.FlushRegion(flush_begin, flush_size, VideoCommon::CacheType::BufferCache);
+    if (stats) {
+        g_pbflush_stats.flushes.fetch_add(1, std::memory_order_relaxed);
+    }
     return true;
 }
 
