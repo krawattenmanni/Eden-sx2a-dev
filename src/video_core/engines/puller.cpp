@@ -209,6 +209,13 @@ bool Puller::CanResumeNativeAcquire(DmaPusher& dma_pusher) const {
     if (!native_acquire) {
         return false;
     }
+    // As in ProcessSemaphoreTriggerMethod: a GEQUAL acquire guest memory already meets stays
+    // met, whatever the back still writes.
+    if (native_acquire->operation == static_cast<u32>(GpuSemaphoreOperation::AcquireGequal) &&
+        VideoCommon::GpuSplit::Get().Active() && !dma_pusher.memory_manager.IsShuttingDown() &&
+        dma_pusher.memory_manager.Read<u32>(native_acquire->address) >= native_acquire->value) {
+        return true;
+    }
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadNativeSemaphoreWord asks are its state).
     DrainBack(VideoCommon::Nx2Profile::DrainSite::Resume);
