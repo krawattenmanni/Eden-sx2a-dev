@@ -511,11 +511,11 @@ IGpuSession::IGpuSession(Core::System& system, std::shared_ptr<Nvidia::Module> m
     };
     RegisterHandlersTipc(functions);
     if (m_user_version == 3) {
-        // User version 3 (MKW 1.0.0) numbers the partition queries one lower, and its user
-        // partition reply is only the {begin, end} pair.
+        // User version 3 (MKW 1.0.0) asks for the user partition with 201 and the gsv one
+        // with 202, and each reply is only a pair of words.
         static const FunctionInfo legacy_functions[] = {
-            {201, &IGpuSession::GetAddressSpacePartition, "GetGsvPartition"},
-            {202, &IGpuSession::GetAddressSpacePartition, "GetUserPartition"},
+            {201, &IGpuSession::GetAddressSpacePartition, "GetUserPartition"},
+            {202, &IGpuSession::GetAddressSpacePartition, "GetGsvPartition"},
         };
         RegisterHandlersTipc(legacy_functions);
     }
@@ -566,8 +566,8 @@ void IGpuSession::GetAddressSpacePartition(HLERequestContext& ctx) {
     Result result = Kernel::ResultInvalidCombination;
     std::array<u64, 9> values{};
     const bool legacy = m_user_version == 3;
-    const bool user = ctx.GetCommand() == (legacy ? 202U : 203U);
-    if (!user) {
+    const bool user = ctx.GetCommand() == (legacy ? 201U : 203U);
+    if (!user && !legacy) {
         values[0] = ~u64{0}; // No supervisor-owned partition is reserved by this adapter.
     }
     if (packet[0] == 16 + ctx.GetCommand() && packet[1] == 1) {
@@ -588,7 +588,13 @@ void IGpuSession::GetAddressSpacePartition(HLERequestContext& ctx) {
                 std::memcpy(regions.data(), output.data() + 16, sizeof(regions));
                 values[0] = 1;
                 values[1] = regions[0].offset;
-                values[2] = regions[1].offset + regions[1].pages * regions[1].page_size - 1;
+                if (legacy) {
+                    // The small-page region only: the extended ABI reports no second one, and
+                    // its size also bounds the reservation if the SDK reads {start, end}.
+                    values[2] = regions[0].pages * regions[0].page_size;
+                } else {
+                    values[2] = regions[1].offset + regions[1].pages * regions[1].page_size - 1;
+                }
             } else {
                 result = Kernel::ResultInvalidState;
             }
@@ -597,11 +603,12 @@ void IGpuSession::GetAddressSpacePartition(HLERequestContext& ctx) {
                   ctx.GetCommand(), id, user ? values[1] : values[0],
                   user ? values[2] : values[1], result.raw);
     }
-    if (user && legacy) {
+    if (legacy) {
+        // The gsv partition is empty.
         IPC::ResponseBuilder rb{ctx, 6};
         rb.Push(result.raw);
-        rb.Push(values[1]);
-        rb.Push(values[2]);
+        rb.Push(user ? values[1] : u64{0});
+        rb.Push(user ? values[2] : u64{0});
         return;
     }
     IPC::ResponseBuilder rb{ctx, user ? 20U : 6U};
