@@ -1,0 +1,56 @@
+name: Android Dev-APK bauen
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Eigene Patches anwenden (Ordner my-patches)
+        run: |
+          if ls my-patches/*.patch >/dev/null 2>&1; then
+            for p in my-patches/*.patch; do
+              echo "== wende $p an"
+              git apply --verbose --whitespace=nowarn "$p"
+            done
+          else
+            echo "keine Patches gefunden"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: SDK, NDK, CMake und glslang installieren
+        run: |
+          sdkmanager "cmake;3.31.5" "ndk;28.2.13676358" "platforms;android-36"
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools ccache
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.cache/ccache
+          key: android-${{ hashFiles('src/android/**/*.kts', 'cpmfile.json') }}
+          restore-keys: android-
+
+      - name: APK bauen
+        env:
+          CCACHE: "true"
+        run: sh .ci/android/build.sh -t standard -b RelWithDebInfo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eden-sx2a-dev-apk
+          path: artifacts/*.apk
+          if-no-files-found: error
