@@ -1,0 +1,63 @@
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp	2026-11-01 12:50:07.194849844 +0000
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp	2026-11-01 12:50:07.196174860 +0000
+@@ -5,6 +5,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <atomic>
++#include <chrono>
+ #include "video_core/gpu_write_watch.h"
+ #include "video_core/native_diagnostics.h"
+ #include <algorithm>
+@@ -256,22 +257,40 @@
+ // each, to see how a frame is built.
+ bool FrameEventsActive() {
+     static const bool enabled = std::getenv("EDEN_FRAME_EVENTS") != nullptr;
+-    if (!enabled) {
+-        return false;
+-    }
+     static u32 remaining{};
+     static u32 checks{};
++    // Dev build, no environment variable or file needed: with "Debug knobs" = N (seconds), the next
++    // 6000 draws, clears and dispatches are logged N seconds after the first draw, then again every
++    // 45 seconds, three times in total. Each draw is one "FE" line (see LogFrameDraw).
++    static u32 knob_captures{};
++    static std::chrono::steady_clock::time_point knob_next{};
+     if (remaining == 0 && (checks++ & 63) == 0) {
+-        std::error_code error;
+-        if (std::filesystem::exists("frame-events.request", error)) {
+-            u32 count = 4000;
+-            {
+-                std::ifstream request("frame-events.request");
+-                request >> count;
++        const u32 knob = Settings::values.debug_knobs.GetValue();
++        if (knob != 0 && knob_captures < 3) {
++            const auto now = std::chrono::steady_clock::now();
++            if (knob_next == std::chrono::steady_clock::time_point{}) {
++                knob_next = now + std::chrono::seconds(knob);
++                LOG_INFO(HW_GPU, "Frame events: first capture in {} s", knob);
++            } else if (now >= knob_next) {
++                ++knob_captures;
++                remaining = 6000;
++                knob_next = now + std::chrono::seconds(45);
++                LOG_INFO(HW_GPU, "Frame events: logging the next 6000 (capture {} of 3)",
++                         knob_captures);
++            }
++        }
++        if (remaining == 0 && enabled) {
++            std::error_code error;
++            if (std::filesystem::exists("frame-events.request", error)) {
++                u32 count = 4000;
++                {
++                    std::ifstream request("frame-events.request");
++                    request >> count;
++                }
++                std::filesystem::remove("frame-events.request", error);
++                remaining = count;
++                LOG_INFO(HW_GPU, "Frame events: logging the next {}", count);
+             }
+-            std::filesystem::remove("frame-events.request", error);
+-            remaining = count;
+-            LOG_INFO(HW_GPU, "Frame events: logging the next {}", count);
+         }
+     }
+     if (remaining == 0) {
